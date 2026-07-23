@@ -115,6 +115,8 @@ class ProxyTests(unittest.TestCase):
                 # openrouter/vercel/concentrate upstreams) — exercises the
                 # path-join so the doubled-/api/v1 bug can't regress.
                 "orv1": upstream_url + "/api/v1",
+                # Cloudflare's endpoint carries a deep base path ending /compat.
+                "cloudflare": upstream_url + "/v1/acct/default/compat",
             },
             anthropic_upstreams={"deepseek": upstream_url},
             openai_upstream=upstream_url,
@@ -383,18 +385,87 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(url, "http://127.0.0.1:9/cell/tok/gateway/openrouter")
         self.assertNotIn("api/v1", url)
 
-    def test_pi_gateway_models_cover_all_three_gateways(self):
-        for name in ("openrouter", "vercel", "concentrate"):
+    def test_pi_gateway_models_cover_all_gateways(self):
+        for name in ("openrouter", "vercel", "concentrate", "cloudflare"):
             self.assertIn(f"{name}/openai/gpt-5.6", pi.GATEWAY_MODELS)
             spec = pi.GATEWAY_MODELS[f"{name}/anthropic/claude-sonnet-4.5"]
             self.assertEqual(spec["provider"], name)
             self.assertEqual(spec["model_id"], "anthropic/claude-sonnet-4.5")
             self.assertIn(name, pi.GATEWAY_PROVIDERS)
 
+    def test_cloudflare_uses_per_provider_key_and_templated_base_url(self):
+        env = {"CLOUDFLARE_ACCOUNT_ID": "acct123", "CLOUDFLARE_GATEWAY_ID": "gw9"}
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        try:
+            models = pi._build_gateway_models()
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        # Cloudflare forwards the underlying provider's own key, not one gateway key.
+        self.assertEqual(models["cloudflare/openai/gpt-5.6"]["env_key"], "OPENAI_API_KEY")
+        self.assertEqual(
+            models["cloudflare/anthropic/claude-sonnet-4.5"]["env_key"], "ANTHROPIC_API_KEY")
+        # Base URL is templated from the account + gateway id.
+        self.assertEqual(
+            models["cloudflare/openai/gpt-5.6"]["base_url"],
+            "https://gateway.ai.cloudflare.com/v1/acct123/gw9/compat")
+
+    def test_cloudflare_gateway_id_defaults_to_default(self):
+        old_acct = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+        old_gw = os.environ.get("CLOUDFLARE_GATEWAY_ID")
+        os.environ["CLOUDFLARE_ACCOUNT_ID"] = "acctX"
+        os.environ.pop("CLOUDFLARE_GATEWAY_ID", None)
+        try:
+            self.assertEqual(
+                pi._cloudflare_base_url(),
+                "https://gateway.ai.cloudflare.com/v1/acctX/default/compat")
+        finally:
+            if old_acct is None:
+                os.environ.pop("CLOUDFLARE_ACCOUNT_ID", None)
+            else:
+                os.environ["CLOUDFLARE_ACCOUNT_ID"] = old_acct
+            if old_gw is not None:
+                os.environ["CLOUDFLARE_GATEWAY_ID"] = old_gw
+
+    def test_gateway_upstreams_for_proxy_templates_cloudflare(self):
+        old_acct = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+        old_gw = os.environ.get("CLOUDFLARE_GATEWAY_ID")
+        os.environ["CLOUDFLARE_ACCOUNT_ID"] = "acctY"
+        os.environ.pop("CLOUDFLARE_GATEWAY_ID", None)
+        try:
+            ups = run._gateway_upstreams_for_proxy("cloudflare/openai/gpt-5.6")
+            self.assertEqual(
+                ups["cloudflare"],
+                "https://gateway.ai.cloudflare.com/v1/acctY/default/compat")
+            # Non-cloudflare arms add nothing; missing account id yields nothing.
+            self.assertEqual(run._gateway_upstreams_for_proxy("openrouter/openai/gpt-5.6"), {})
+            os.environ.pop("CLOUDFLARE_ACCOUNT_ID", None)
+            self.assertEqual(run._gateway_upstreams_for_proxy("cloudflare/openai/gpt-5.6"), {})
+        finally:
+            if old_acct is None:
+                os.environ.pop("CLOUDFLARE_ACCOUNT_ID", None)
+            else:
+                os.environ["CLOUDFLARE_ACCOUNT_ID"] = old_acct
+            if old_gw is not None:
+                os.environ["CLOUDFLARE_GATEWAY_ID"] = old_gw
+
+    def test_cloudflare_gateway_route_path_join(self):
+        # base path ends /compat; pi appends /chat/completions -> exactly one join.
+        self._post("/cell/tok-cf/gateway/cloudflare/chat/completions",
+                   {"model": "openai/gpt-5.6", "stream": False})
+        self.assertEqual(
+            self.upstream.requests[-1]["path"], "/v1/acct/default/compat/chat/completions")
+        self.assertEqual(self._ledger("tok-cf")[0]["route"], "gateway/cloudflare")
+
     def test_pi_gateway_cells_are_proxy_supported(self):
         self.assertTrue(run.proxy_supported_for_cell("pi", "openrouter/openai/gpt-5.6"))
         self.assertTrue(
             run.proxy_supported_for_cell("pi", "openrouter/anthropic/claude-sonnet-4.5"))
+        self.assertTrue(run.proxy_supported_for_cell("pi", "cloudflare/openai/gpt-5.6"))
         self.assertFalse(run.proxy_supported_for_cell("opencode", "openrouter/openai/gpt-5.6"))
 
     def test_apply_proxy_ledger_aggregates_served_model_and_cost(self):

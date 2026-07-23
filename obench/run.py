@@ -78,9 +78,28 @@ PROXY_OPENROUTER_MODELS = {"laguna-s-2.1", "inkling"}
 # the gateway's model slug (obench/adapters/pi.py GATEWAY_MODELS).
 PROXY_GATEWAY_MODELS = {
     f"{gw}/{slug}"
-    for gw in ("openrouter", "vercel", "concentrate")
+    for gw in ("openrouter", "vercel", "concentrate", "cloudflare")
     for slug in ("openai/gpt-5.6", "anthropic/claude-sonnet-4.5")
 }
+
+
+def _gateway_upstreams_for_proxy(model):
+    """Per-run gateway upstreams whose URL isn't a static default.
+
+    Cloudflare AI Gateway's endpoint embeds the account + gateway id, so it can't
+    live in ``proxy.DEFAULT_GATEWAY_UPSTREAMS``; build it from env when a
+    cloudflare arm runs. Returns {} otherwise.
+    """
+    upstreams = {}
+    if isinstance(model, str) and model.startswith("cloudflare/"):
+        acct = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+        if acct:
+            gw_id = os.environ.get("CLOUDFLARE_GATEWAY_ID") or "default"
+            upstreams["cloudflare"] = (
+                f"https://gateway.ai.cloudflare.com/v1/{acct}/{gw_id}/compat")
+    return upstreams
+
+
 PROXY_CLAUDE_MODELS = PROXY_CHAT_MODELS | {"claude-opus-4-8", "gpt-5.6-sol"}
 CHECKER_CAPTURE_LIMIT = 8000
 CHECKER_CAPTURE_TRUNCATED_PREFIX = "[truncated to last 8000 chars]\n"
@@ -2034,6 +2053,7 @@ def main(argv=None):
             subbridge_origin = urlunsplit((parsed_bridge.scheme, parsed_bridge.netloc, "", "", ""))
         proxy_server, _thread = counting_proxy.start_in_thread(
             listen_host, 0, ledger_parent, subbridge_upstream=subbridge_origin,
+            gateway_upstreams=_gateway_upstreams_for_proxy(args.model),
             require_registered_tokens=args.exec_mode == "docker")
         port = proxy_server.server_address[1]
         proxy_ctx = {

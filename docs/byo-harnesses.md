@@ -127,14 +127,31 @@ pi -> counting proxy (/cell/<token>/gateway/<name>) -> gateway -> provider
 
 Built-in gateway upstreams (`obench/proxy.py`):
 
-| name          | upstream                          | API key env           |
-|---------------|-----------------------------------|-----------------------|
-| `openrouter`  | `https://openrouter.ai/api/v1`    | `OPENROUTER_API_KEY`  |
-| `vercel`      | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY`  |
-| `concentrate` | `https://api.concentrate.ai/v1`   | `CONCENTRATE_API_KEY` |
+| name          | upstream                                       | API key env                             |
+|---------------|------------------------------------------------|-----------------------------------------|
+| `openrouter`  | `https://openrouter.ai/api/v1`                 | `OPENROUTER_API_KEY`                    |
+| `vercel`      | `https://ai-gateway.vercel.sh/v1`              | `AI_GATEWAY_API_KEY`                    |
+| `concentrate` | `https://api.concentrate.ai/v1`                | `CONCENTRATE_API_KEY`                   |
+| `cloudflare`  | `gateway.ai.cloudflare.com/v1/<acct>/<gw>/compat` | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
 
 Add or override an upstream (e.g. a private/enterprise gateway) without code
 changes: `obench run ... --gateway-upstream mygw=https://gateway.example.com/v1`.
+
+**Cloudflare AI Gateway** differs from the others: its endpoint embeds your
+account and gateway id, and its OpenAI-compatible endpoint forwards the
+*underlying provider's own* key rather than a single gateway key. So it is
+configured from the environment — set `CLOUDFLARE_ACCOUNT_ID` (and optionally
+`CLOUDFLARE_GATEWAY_ID`, default `default`), plus the provider key the arm needs
+(`cloudflare/openai/*` uses `OPENAI_API_KEY`, `cloudflare/anthropic/*` uses
+`ANTHROPIC_API_KEY`). This targets an *unauthenticated* gateway; an
+authenticated gateway (requiring a `cf-aig-authorization` header) is not yet
+supported.
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID=... OPENAI_API_KEY=...
+obench run --harness pi --model cloudflare/openai/gpt-5.6 \
+  --task make-it-run --proxy --trials 3
+```
 
 Model names are `\<gateway\>/\<provider\>/\<model\>`, so one gateway key reaches
 different vendors in the same run (fixed-model mode — one model, no router

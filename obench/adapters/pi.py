@@ -279,6 +279,28 @@ OPEN_MODELS = {
 # chat/<vendor> route; GATEWAY_PROVIDERS lists the provider names that route that
 # way. All three below are OpenAI-compatible (swap baseUrl + key, keep the
 # provider-qualified model slug).
+# Cloudflare AI Gateway differs from the others in two ways, so it carries a
+# base_url_fn (its endpoint embeds the account + gateway id, templated from env)
+# and per_provider_key (its OpenAI-compat endpoint forwards the *provider's own*
+# key as the bearer token, so cloudflare/openai/* needs OPENAI_API_KEY and
+# cloudflare/anthropic/* needs ANTHROPIC_API_KEY, rather than one gateway key).
+CLOUDFLARE_ACCOUNT_ENV = "CLOUDFLARE_ACCOUNT_ID"
+CLOUDFLARE_GATEWAY_ENV = "CLOUDFLARE_GATEWAY_ID"  # optional; defaults to "default"
+
+
+def _cloudflare_base_url():
+    acct = os.environ.get(CLOUDFLARE_ACCOUNT_ENV, "")
+    gw = os.environ.get(CLOUDFLARE_GATEWAY_ENV) or "default"
+    return f"https://gateway.ai.cloudflare.com/v1/{acct}/{gw}/compat"
+
+
+# Bearer key per underlying provider, for gateways that pass the provider's own
+# key through (Cloudflare) rather than issuing a single gateway key.
+_GATEWAY_PROVIDER_KEYS = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+
 GATEWAYS = {
     "openrouter": {"display": "OpenRouter", "base_url": "https://openrouter.ai/api/v1",
                    "env_key": "OPENROUTER_API_KEY"},
@@ -286,6 +308,8 @@ GATEWAYS = {
                "env_key": "AI_GATEWAY_API_KEY"},
     "concentrate": {"display": "Concentrate.ai", "base_url": "https://api.concentrate.ai/v1",
                     "env_key": "CONCENTRATE_API_KEY"},
+    "cloudflare": {"display": "Cloudflare AI Gateway", "base_url_fn": _cloudflare_base_url,
+                   "per_provider_key": True},
 }
 GATEWAY_PROVIDERS = set(GATEWAYS)
 
@@ -310,10 +334,15 @@ def _build_gateway_models():
     """
     models = {}
     for gw_name, gw in GATEWAYS.items():
+        base_url = gw["base_url_fn"]() if gw.get("base_url_fn") else gw["base_url"]
         for slug, dims in _GATEWAY_MODEL_SLUGS.items():
+            if gw.get("per_provider_key"):
+                env_key = _GATEWAY_PROVIDER_KEYS[slug.split("/", 1)[0]]
+            else:
+                env_key = gw["env_key"]
             models[f"{gw_name}/{slug}"] = {
                 "provider": gw_name, "model_id": slug,
-                "base_url": gw["base_url"], "env_key": gw["env_key"],
+                "base_url": base_url, "env_key": env_key,
                 "display": gw["display"], "thinking": "medium",
                 "context_window": dims["context_window"], "max_tokens": dims["max_tokens"],
                 "compat": _GATEWAY_COMPAT, "thinkingLevelMap": _GATEWAY_THINKING_MAP,
