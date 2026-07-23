@@ -113,6 +113,45 @@ proxy. See `obench/examples/pi-harness.toml` for a complete invocation-equivalen
 manifest (it deliberately does not claim proxy support because Pi's native
 adapter routes its subscription endpoint through a generated config file).
 
+## Gateways / model routers
+
+An AI gateway (or model router) exposes many providers behind one
+OpenAI-compatible endpoint and one key. OpenBench can benchmark a harness
+*through* a gateway: the harness still talks to the counting proxy, and the proxy
+forwards to the gateway as its upstream, so tokens, latency, status, the
+gateway-served model, and gateway-reported cost are all recorded per call.
+
+```
+pi -> counting proxy (/cell/<token>/gateway/<name>) -> gateway -> provider
+```
+
+Built-in gateway upstreams (`obench/proxy.py`):
+
+| name          | upstream                          | API key env           |
+|---------------|-----------------------------------|-----------------------|
+| `openrouter`  | `https://openrouter.ai/api/v1`    | `OPENROUTER_API_KEY`  |
+| `vercel`      | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY`  |
+| `concentrate` | `https://api.concentrate.ai/v1`   | `CONCENTRATE_API_KEY` |
+
+Add or override an upstream (e.g. a private/enterprise gateway) without code
+changes: `obench run ... --gateway-upstream mygw=https://gateway.example.com/v1`.
+
+Model names are `\<gateway\>/\<provider\>/\<model\>`, so one gateway key reaches
+different vendors in the same run (fixed-model mode — one model, no router
+fallback):
+
+```bash
+export OPENROUTER_API_KEY=...   # or AI_GATEWAY_API_KEY / CONCENTRATE_API_KEY
+obench run --harness pi --model openrouter/anthropic/claude-sonnet-4.5 \
+  --task make-it-run --proxy --trials 3
+obench run --harness pi --model vercel/openai/gpt-5.6 \
+  --task make-it-run --proxy --trials 3
+```
+
+The ledger row for a gateway cell adds `served_model` (the model the gateway
+actually served — may differ from the requested one under routing), `cost`, and
+`upstream_cost` where the gateway reports them in the response `usage`.
+
 ## Doctor preflight
 
 `obench doctor` accepts the same `--candidate` flag as `obench run`. For a

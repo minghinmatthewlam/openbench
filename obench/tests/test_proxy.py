@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from obench import proxy  # noqa: E402
 from obench import run  # noqa: E402
+from obench.adapters import pi  # noqa: E402
 
 SECRET = "TEST_SECRET_VALUE_MUST_NOT_APPEAR"
 
@@ -38,7 +39,29 @@ class FixtureHandler(BaseHTTPRequestHandler):
             "host": self.headers.get("host"),
             "body": self.rfile.read(length).decode("utf-8", "replace"),
         })
-        if self.path.endswith("/sse"):
+        if self.path.endswith("/gateway-chat"):
+            payload = json.dumps({
+                "model": "anthropic/claude-sonnet-4.5",
+                "usage": {
+                    "prompt_tokens": 30,
+                    "completion_tokens": 8,
+                    "total_tokens": 38,
+                    "prompt_tokens_details": {"cached_tokens": 4},
+                    "completion_tokens_details": {"reasoning_tokens": 2},
+                    "cost": 0.0123,
+                    "cost_details": {"upstream_inference_cost": 0.0100},
+                },
+            }).encode()
+            ctype = "application/json"
+        elif self.path.endswith("/gateway-sse"):
+            payload = (
+                "data: {\"model\":\"openai/gpt-5.6\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+                "data: {\"model\":\"openai/gpt-5.6\",\"usage\":{\"prompt_tokens\":12,"
+                "\"completion_tokens\":3,\"total_tokens\":15,\"cost\":0.0009}}\n\n"
+                "data: [DONE]\n\n"
+            ).encode()
+            ctype = "text/event-stream"
+        elif self.path.endswith("/sse"):
             payload = (
                 "event: response.completed\n"
                 "data: {\"response\":{\"usage\":{\"input_tokens\":10,"
@@ -85,6 +108,13 @@ class ProxyTests(unittest.TestCase):
         self.proxy = proxy.make_server(
             "127.0.0.1", 0, self.tmp.name,
             chat_upstreams={"deepseek": upstream_url},
+            gateway_upstreams={
+                "openrouter": upstream_url,
+                # A gateway upstream that carries a base path (like the real
+                # openrouter/vercel/concentrate upstreams) — exercises the
+                # path-join so the doubled-/api/v1 bug can't regress.
+                "orv1": upstream_url + "/api/v1",
+            },
             anthropic_upstreams={"deepseek": upstream_url},
             openai_upstream=upstream_url,
             subbridge_upstream=upstream_url,
@@ -269,6 +299,115 @@ class ProxyTests(unittest.TestCase):
         self.assertFalse(run.proxy_supported_for_cell("cursor", "gpt-5.5-medium"))
         self.assertTrue(run.proxy_supported_for_cell("grokbuild", "deepseek-v4-flash"))
         self.assertFalse(run.proxy_supported_for_cell("devin", "gpt-5.5-medium"))
+
+    def test_gateway_route_meters_served_model_and_cost(self):
+        self._post("/cell/tok-gw/gateway/openrouter/gateway-chat",
+                   {"model": "anthropic/claude-sonnet-4.5", "stream": False})
+        self.assertEqual(self.upstream.requests[-1]["path"], "/gateway-chat")
+        row = self._ledger("tok-gw")[0]
+        self.assertEqual(row["route"], "gateway/openrouter")
+        # served_model comes from the RESPONSE (what the gateway actually served),
+        # not the request's requested model.
+        self.assertEqual(row["served_model"], "anthropic/claude-sonnet-4.5")
+        self.assertEqual(row["cost"], 0.0123)
+        self.assertEqual(row["upstream_cost"], 0.01)
+        self.assertEqual(row["usage"]["prompt_tokens"], 30)
+
+    def test_gateway_sse_served_model_and_cost(self):
+        self._post("/cell/tok-gw-sse/gateway/openrouter/gateway-sse",
+                   {"model": "openai/gpt-5.6", "stream": True})
+        row = self._ledger("tok-gw-sse")[0]
+        self.assertEqual(row["served_model"], "openai/gpt-5.6")
+        self.assertEqual(row["cost"], 0.0009)
+        self.assertEqual(row["usage"]["total_tokens"], 15)
+
+    def test_unknown_gateway_is_rejected(self):
+        conn = http.client.HTTPConnection(self.host, self.port, timeout=5)
+        data = b'{"model":"x"}'
+        conn.request("POST", "/cell/tok-badgw/gateway/nope/chat/completions", body=data, headers={
+            "content-type": "application/json", "content-length": str(len(data)),
+        })
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        self.assertEqual(resp.status, 502)
+
+    def test_extract_response_model_and_cost_units(self):
+        self.assertEqual(
+            proxy.extract_response_model(b'{"model":"a/b","usage":{"prompt_tokens":1}}'),
+            "a/b")
+        self.assertEqual(
+            proxy.extract_response_model(
+                b'data: {"model":"a"}\n\ndata: {"model":"b"}\n\n'),
+            "b")
+        self.assertEqual(
+            proxy.extract_response_model(b'{"response":{"model":"r/m"}}'), "r/m")
+        self.assertIsNone(proxy.extract_response_model(b'{"usage":{"prompt_tokens":1}}'))
+        self.assertEqual(
+            proxy.extract_cost({"cost": 0.5, "cost_details": {"upstream_inference_cost": 0.4}}),
+            {"cost": 0.5, "upstream_cost": 0.4})
+        self.assertEqual(proxy.extract_cost({"prompt_tokens": 1}), {})
+        # booleans must not be mistaken for numeric cost
+        self.assertEqual(proxy.extract_cost({"cost": True}), {})
+
+    def test_gateway_upstream_base_path_is_not_doubled(self):
+        # pi hands the proxy a base URL of .../gateway/orv1 (no path tail); pi's
+        # openai-completions api then appends /chat/completions. With an upstream
+        # that carries /api/v1, the forwarded path must be /api/v1/chat/completions
+        # — NOT /api/v1/api/v1/chat/completions.
+        self._post("/cell/tok-orv1/gateway/orv1/chat/completions",
+                   {"model": "openai/gpt-5.6", "stream": False})
+        self.assertEqual(self.upstream.requests[-1]["path"], "/api/v1/chat/completions")
+        row = self._ledger("tok-orv1")[0]
+        self.assertEqual(row["route"], "gateway/orv1")
+
+    def test_pi_proxied_base_url_for_gateway_drops_path_tail(self):
+        # Regression: the gateway upstream registry carries the /api/v1 base, so
+        # the pi base URL must be .../gateway/<name> with no model-base-url tail.
+        env = {
+            "OPENBENCH_PROXY": "1",
+            "OPENBENCH_PROXY_BASE_URL": "http://127.0.0.1:9",
+            "OPENBENCH_PROXY_CELL_TOKEN": "tok",
+        }
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        try:
+            url = pi._proxied_base_url("openrouter", "https://openrouter.ai/api/v1")
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.assertEqual(url, "http://127.0.0.1:9/cell/tok/gateway/openrouter")
+        self.assertNotIn("api/v1", url)
+
+    def test_pi_gateway_models_cover_all_three_gateways(self):
+        for name in ("openrouter", "vercel", "concentrate"):
+            self.assertIn(f"{name}/openai/gpt-5.6", pi.GATEWAY_MODELS)
+            spec = pi.GATEWAY_MODELS[f"{name}/anthropic/claude-sonnet-4.5"]
+            self.assertEqual(spec["provider"], name)
+            self.assertEqual(spec["model_id"], "anthropic/claude-sonnet-4.5")
+            self.assertIn(name, pi.GATEWAY_PROVIDERS)
+
+    def test_pi_gateway_cells_are_proxy_supported(self):
+        self.assertTrue(run.proxy_supported_for_cell("pi", "openrouter/openai/gpt-5.6"))
+        self.assertTrue(
+            run.proxy_supported_for_cell("pi", "openrouter/anthropic/claude-sonnet-4.5"))
+        self.assertFalse(run.proxy_supported_for_cell("opencode", "openrouter/openai/gpt-5.6"))
+
+    def test_apply_proxy_ledger_aggregates_served_model_and_cost(self):
+        row = {}
+        run.apply_proxy_ledger(row, [
+            {"usage": {"prompt_tokens": 10, "completion_tokens": 2},
+             "served_model": "openai/gpt-5.6", "cost": 0.001, "upstream_cost": 0.0008},
+            {"usage": {"prompt_tokens": 5, "completion_tokens": 1},
+             "served_model": "openai/gpt-5.6", "cost": 0.0005},
+        ])
+        self.assertEqual(row["served_model"], ["openai/gpt-5.6"])
+        self.assertAlmostEqual(row["cost"], 0.0015)
+        self.assertAlmostEqual(row["upstream_cost"], 0.0008)
+        self.assertEqual(row["tokens_proxy_calls"], 2)
 
 
 if __name__ == "__main__":
