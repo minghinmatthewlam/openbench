@@ -27,7 +27,7 @@ accounting, and route-integrity probes without a coding harness, see
 [`docs/gateway-probe.md`](docs/gateway-probe.md) (`obench gateway probe
 validate|doctor|run|report`).
 
-**Live results:** https://minghinmatthewlam.github.io/openbench/ — the landing
+**Live results:** https://openbench.run/ — the landing
 page is the leaderboard itself, with a tab each for Harness Bench and Gateway
 Bench (built by `obench site build`; see [`docs/site.md`](docs/site.md)).
 
