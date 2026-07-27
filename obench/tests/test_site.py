@@ -230,8 +230,13 @@ class GatewayProbeFamilyTests(_SiteFixture):
         self.assertEqual(len(bundle["arms"]), 2)
         self.assertEqual(len(bundle["contrasts"]), 1)
 
-        _, _, facts = site._lede(doc)
-        self.assertIn("1 gateway bundles", facts)
+        _, _, facts = site._lede(doc, "gateway")
+        self.assertIn("1 published bundle", facts)
+        self.assertIn("2 routes", facts)
+        self.assertIn("model match: exact revision", facts)
+        self.assertIn("2/2 cold blocks", facts)
+        self.assertIn("2/2 warm blocks", facts)
+        self.assertIn("8 requests", facts)
         self.assertIn("updated 2026-07-27", facts)
 
         page = site.render_board_html(doc)
@@ -892,6 +897,20 @@ class RenderTests(_SiteFixture):
         """The script only enhances; the data must be in the document."""
         page = site.render_board_html(site.build_board(self.site_dir))
         head, _, script = page.partition("<script>")
+        self.assertIn(
+            '<main id="view-harness"><div class="lede" '
+            'data-lede="harness">', head
+        )
+        self.assertIn(
+            '<main id="view-gateway"><div class="lede" '
+            'data-lede="gateway">', head
+        )
+        for view in ("releases", "methodology", "contact"):
+            self.assertIn(
+                f'<main id="view-{view}"><div class="lede" '
+                'data-lede="general">',
+                head,
+            )
         self.assertIn("<tbody>", head)
         self.assertIn('data-harness="fast"', head)
         self.assertIn('data-harness="slow"', head)
@@ -908,6 +927,16 @@ class RenderTests(_SiteFixture):
         self.assertNotIn("Gateway Probe", page)
         self.assertIn('if (hash === "gateway-probe")', page)
         self.assertIn('window.history.replaceState(null, "", "#gateway")', page)
+        self.assertIn(
+            'document.getElementById("view-" + name).hidden = name !== view;',
+            page,
+        )
+        self.assertIn(
+            "var target = document.getElementById(hash);", page
+        )
+        self.assertIn(
+            "var host = target && target.closest", page
+        )
         self.assertIn('id="view-methodology"', page)
         self.assertNotIn("Gateway Tax", page)
 
@@ -1013,7 +1042,9 @@ class DesignContractTests(_SiteFixture):
 
     def test_lede_states_coverage_and_draws_no_conclusion(self):
         """The page reports what is covered; the boards carry the results."""
-        title, deck, facts = site._lede(site.build_board(self.site_dir))
+        title, deck, facts = site._lede(
+            site.build_board(self.site_dir), "harness"
+        )
         self.assertTrue(any("result-sealed bundles" in f for f in facts))
         self.assertTrue(any("valid result rows" in f for f in facts))
         self.assertTrue(any("matched result rows" in f for f in facts))
@@ -1026,16 +1057,56 @@ class DesignContractTests(_SiteFixture):
 
     def test_lede_survives_an_empty_site(self):
         with tempfile.TemporaryDirectory() as td:
-            title, deck, facts = site._lede(site.build_board(td))
-        self.assertTrue(title)
-        self.assertTrue(deck)
-        self.assertTrue(facts)
+            doc = site.build_board(td)
+        for family in ("harness", "gateway", "general"):
+            title, deck, facts = site._lede(doc, family)
+            self.assertTrue(title)
+            self.assertTrue(deck)
+            self.assertTrue(facts)
 
-    def test_lede_updated_date_includes_gateway_bundles(self):
+    def test_family_ledes_isolate_coverage_facts(self):
         doc = site.build_board(self.site_dir)
-        doc["gateway"]["bundles"] = [{"date": "2026-07-26"}]
-        _, _, facts = site._lede(doc)
-        self.assertIn("updated 2026-07-26", facts)
+        doc["gateway"]["bundle_count"] = 1
+        doc["gateway"]["bundles"] = [{
+            "arms": [{"arm_id": f"route-{i}"} for i in range(5)],
+            "model_match": "rolling_alias",
+            "complete_blocks": {"cold": 30, "warm": 30},
+            "scheduled_blocks_per_condition": 30,
+            "result_count": 300,
+            "date": "2026-07-27",
+        }]
+
+        harness_title, harness_deck, harness_facts = site._lede(
+            doc, "harness"
+        )
+        self.assertEqual(harness_title, "Coding-agent harness benchmarks")
+        self.assertIn("2 harnesses", harness_facts)
+        self.assertIn("updated 2026-07-24", harness_facts)
+        self.assertNotIn("routes", " ".join(harness_facts))
+        self.assertNotIn("requests", " ".join(harness_facts))
+        self.assertNotIn("gateway", harness_deck.lower())
+
+        gateway_title, gateway_deck, gateway_facts = site._lede(
+            doc, "gateway"
+        )
+        self.assertEqual(gateway_title, "Managed AI gateway benchmarks")
+        self.assertEqual(gateway_facts, [
+            "1 published bundle",
+            "5 routes",
+            "model match: rolling alias",
+            "30/30 cold blocks",
+            "30/30 warm blocks",
+            "300 requests",
+            "updated 2026-07-27",
+        ])
+        self.assertIn("latest published bundle", gateway_deck)
+        self.assertNotIn("harness", gateway_deck.lower())
+        self.assertNotIn("result rows", " ".join(gateway_facts))
+
+        general_title, _, general_facts = site._lede(doc, "general")
+        self.assertEqual(general_title, "OpenBench benchmark results")
+        self.assertNotIn("requests", " ".join(general_facts))
+        self.assertNotIn("complete cold", " ".join(general_facts))
 
     def test_harness_metadata_names_counts_and_digests_precisely(self):
         page = site.render_board_html(site.build_board(self.site_dir))

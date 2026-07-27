@@ -1199,46 +1199,91 @@ _JS = r"""
 })();
 """
 
-def _lede(doc):
-    """Page title, one line on what is shown, and a count of what is covered.
+def _lede(doc, family="harness"):
+    """Family-specific title, neutral description, and coverage facts.
 
     Deliberately draws no conclusion from the data: the boards carry the
     results, and readers do their own reading.
     """
     bundles = doc["harness"]["bundles"]
-    harness = doc["harness"]
-    gateway = doc["gateway"]
-    harnesses = {a["harness"] for b in bundles for a in b["arms"]}
-    models = {a["model"] for b in bundles for a in b["arms"]}
-    valid_rows = sum(b.get("countable_rows") or 0 for b in bundles)
-    matched_rows = sum(
-        (b.get("matched") or {}).get("matched_rows")
-        if b.get("table") == "matched"
-        else b.get("countable_rows") or 0
-        for b in bundles
-    )
-    dates = sorted(
-        b["date"]
-        for family in (bundles, gateway["bundles"])
-        for b in family
-        if b.get("date")
-    )
+    if family == "harness":
+        harnesses = {a["harness"] for b in bundles for a in b["arms"]}
+        models = {a["model"] for b in bundles for a in b["arms"]}
+        valid_rows = sum(b.get("countable_rows") or 0 for b in bundles)
+        matched_rows = sum(
+            (b.get("matched") or {}).get("matched_rows")
+            if b.get("table") == "matched"
+            else b.get("countable_rows") or 0
+            for b in bundles
+        )
+        facts = [
+            f"{len(harnesses)} harnesses",
+            f"{len(models)} models",
+            f"{doc['harness']['bundle_count']} result-sealed bundles",
+            f"{valid_rows:,} valid result rows",
+            f"{matched_rows:,} matched result rows",
+        ]
+        dates = sorted(b["date"] for b in bundles if b.get("date"))
+        if dates:
+            facts.append(f"updated {dates[-1]}")
+        return (
+            "Coding-agent harness benchmarks",
+            "Compares coding-agent harnesses while holding the model and task "
+            "fixed. Each board is one result-sealed bundle.",
+            facts,
+        )
 
-    facts = [
-        f"{len(harnesses)} harnesses",
-        f"{len(models)} models",
-        f"{harness['bundle_count']} result-sealed bundles",
-        f"{valid_rows:,} valid result rows",
-        f"{matched_rows:,} matched result rows",
-    ]
-    if gateway["bundle_count"]:
-        facts.append(f"{gateway['bundle_count']} gateway bundles")
-    if dates:
-        facts.append(f"updated {dates[-1]}")
+    if family == "gateway":
+        gateway_bundles = doc["gateway"]["bundles"]
+        if not gateway_bundles:
+            return (
+                "AI gateway request benchmarks",
+                "Measures managed AI gateway routes one model request at a "
+                "time under separately scheduled cold and warm conditions.",
+                ["0 published request bundles"],
+            )
+        latest = gateway_bundles[0]
+        complete = latest.get("complete_blocks") or {}
+        scheduled = latest.get("scheduled_blocks_per_condition")
+
+        def block_fact(condition):
+            completed = complete.get(condition, 0)
+            if scheduled is not None:
+                return f"{completed:,}/{scheduled:,} {condition} blocks"
+            return f"{completed:,} complete {condition} blocks"
+
+        bundle_count = len(gateway_bundles)
+        facts = [
+            f"{bundle_count} published "
+            f"{'bundle' if bundle_count == 1 else 'bundles'}",
+            f"{len(latest.get('arms') or [])} routes",
+        ]
+        if latest.get("model_match"):
+            facts.append(
+                "model match: "
+                f"{str(latest['model_match']).replace('_', ' ')}"
+            )
+        facts.extend([
+            block_fact("cold"),
+            block_fact("warm"),
+            f"{latest.get('result_count') or 0:,} requests",
+        ])
+        if latest.get("date"):
+            facts.append(f"updated {latest['date']}")
+        return (
+            "Managed AI gateway benchmarks",
+            "Compares request latency, throughput, and reliability across "
+            "managed AI gateways under separately scheduled cold and warm "
+            "conditions. Run facts below describe the latest published "
+            "bundle; every board keeps separate denominators.",
+            facts,
+        )
+
     return (
-        "Harness and serving-route leaderboards",
-        doc["cross_family_note"],
-        facts,
+        "OpenBench benchmark results",
+        "Digest-verified benchmark releases, methodology, and project "
+        "information.",
+        ["coding-agent harnesses", "managed AI gateway routes"],
     )
 
 
@@ -2920,12 +2965,20 @@ def _contact_view():
 
 def render_board_html(doc):
     """The whole page: content rendered here, behaviour layered on top."""
-    title, deck, facts = _lede(doc)
-    lede = _tag("div", {"class": "lede"},
-                _tag("h1", {}, _esc(title))
-                + _tag("p", {"class": "deck"}, _esc(deck))
-                + _tag("div", {"class": "dateline"},
-                       "".join(_tag("span", {}, _esc(f)) for f in facts)))
+    def render_lede(family):
+        title, deck, facts = _lede(doc, family)
+        return _tag(
+            "div",
+            {"class": "lede", "data-lede": family},
+            _tag("h1", {}, _esc(title))
+            + _tag("p", {"class": "deck"}, _esc(deck))
+            + _tag(
+                "div",
+                {"class": "dateline"},
+                "".join(_tag("span", {}, _esc(f)) for f in facts),
+            ),
+        )
+
     tabs = "".join(
         _tag("a", {"href": "#" + slug}, _esc(label))
         for slug, label in (
@@ -2954,11 +3007,31 @@ def render_board_html(doc):
     # Every view ships expanded. The script collapses them into tabs; without
     # it the nav degrades to jump links over one continuous page.
     views = (
-        _tag("main", {"id": "view-harness"}, _harness_view(doc))
-        + _tag("main", {"id": "view-gateway"}, _gateway_probe_view(doc))
-        + _tag("main", {"id": "view-releases"}, _releases_view(doc))
-        + _tag("main", {"id": "view-methodology"}, _METHODOLOGY)
-        + _tag("main", {"id": "view-contact"}, _contact_view())
+        _tag(
+            "main",
+            {"id": "view-harness"},
+            render_lede("harness") + _harness_view(doc),
+        )
+        + _tag(
+            "main",
+            {"id": "view-gateway"},
+            render_lede("gateway") + _gateway_probe_view(doc),
+        )
+        + _tag(
+            "main",
+            {"id": "view-releases"},
+            render_lede("general") + _releases_view(doc),
+        )
+        + _tag(
+            "main",
+            {"id": "view-methodology"},
+            render_lede("general") + _METHODOLOGY,
+        )
+        + _tag(
+            "main",
+            {"id": "view-contact"},
+            render_lede("general") + _contact_view(),
+        )
     )
 
     footer = _tag("footer", {},
@@ -3000,7 +3073,6 @@ def render_board_html(doc):
         + f"<style>{_CSS}</style></head><body>"
         + masthead
         + '<div class="wrap">'
-        + lede
         + views
         + footer
         + "</div>"
