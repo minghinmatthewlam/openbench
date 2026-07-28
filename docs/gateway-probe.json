@@ -1,17 +1,17 @@
 [
   {
     "id": "2026-07-27-gpt4o-mini-managed-30",
-    "title": "GPT-4o mini managed gateway request probe",
+    "title": "GPT-4o mini Gateway Bench",
     "model": "GPT-4o mini",
     "date": "2026-07-27",
     "submitter": "OpenBench"
   },
   {
     "id": "2026-07-28-kimi-k3-managed-100",
-    "title": "Kimi K3 managed Gateway Bench, 100 requests per route",
+    "title": "Kimi K3 Gateway Bench, 100 requests per route",
     "model": "Kimi K3",
     "date": "2026-07-28",
-    "run_note": "Five routes, each with 50 cold and 50 warm measured requests. Warm measurements include a separate primer. Up to three total attempts were allowed for transient pre-token failures, but all 500 measured requests succeeded on their first attempt. The output safety limit was 4,096 tokens and no measured response reached it. Routes use rolling Kimi K3 aliases.",
+    "run_note": "Five routes, each with 50 cold and 50 warm measured requests. Warm measurements include a separate primer. Routes use rolling Kimi K3 aliases.",
     "submitter": "OpenBench"
   }
 ]

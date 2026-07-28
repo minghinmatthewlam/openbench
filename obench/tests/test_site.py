@@ -460,25 +460,16 @@ class GatewayProbeFamilyTests(_SiteFixture):
         self.assertIn("Measured missing", page)
         self.assertIn("Measured other", page)
         self.assertIn("Warm-primer natural-stop", page)
-        self.assertIn("missing is never treated as stop", page)
+        self.assertIn("Natural stop means the response ended normally", page)
+        self.assertIn("provider reported a length-based termination", page)
+        self.assertIn("missing means no finish reason was reported", page)
         self.assertLess(
-            page.index("Completion integrity"),
-            page.index("Configured output-limit equality"),
-        )
-        self.assertLess(
-            page.index("Configured output-limit equality"),
             page.index("Gateway leaderboard"),
+            page.index("Completion integrity"),
         )
-        completion_html = page[
-            page.index("Completion integrity"):
-            page.index("Configured output-limit equality")
-        ]
+        completion_html = page[page.index("Completion integrity"):]
         self.assertEqual(completion_html.count(">1/2<"), 2)
-        self.assertIn(
-            "Explicit finish reasons are reported separately in Completion "
-            "integrity; missing reasons are not inferred.",
-            page,
-        )
+        self.assertNotIn("Configured output-limit equality", page)
 
     def test_output_limit_disclosure_is_data_driven(self):
         bundle = site.aggregate_gateway_probe_bundle(
@@ -498,28 +489,11 @@ class GatewayProbeFamilyTests(_SiteFixture):
         })
 
         page = site._gateway_probe_board(bundle)
-        self.assertIn("Configured output-limit equality", page)
-        self.assertIn("Configured request output limit: 3 tokens.", page)
-        self.assertIn("Cold responses at 3-token limit", page)
-        self.assertIn("Warm responses at 3-token limit", page)
-        self.assertIn("Equality is a cap proxy, not proof of truncation", page)
-        self.assertIn("secondary legacy/cap diagnostic", page)
         self.assertIn("Completion integrity", page)
-        self.assertIn(
-            "Explicit finish reasons are reported separately", page
-        )
-        self.assertNotIn("finish reasons are not retained", page)
-        self.assertNotIn("no completion reason is inferred", page)
-        self.assertIn(
-            "Stream-total latency and measured or charged cost are "
-            "generation-length affected.",
-            page,
-        )
-        disclosure_html = page[
-            page.index("Configured output-limit equality"):
-            page.index("Gateway leaderboard")
-        ]
-        self.assertEqual(disclosure_html.count(">2/2<"), 4)
+        self.assertNotIn("Configured output-limit equality", page)
+        self.assertNotIn("Configured request output limit", page)
+        self.assertNotIn("Cold responses at 3-token limit", page)
+        self.assertNotIn("Warm responses at 3-token limit", page)
 
     def test_output_limit_disclosure_ignores_page_metadata_override(self):
         bundle_dir = self._publish_probe()
@@ -536,8 +510,8 @@ class GatewayProbeFamilyTests(_SiteFixture):
                     3,
                 )
                 page = site._gateway_probe_board(bundle)
-                self.assertIn("Configured output-limit equality", page)
-                self.assertIn("Cold responses at 3-token limit", page)
+                self.assertNotIn("Configured output-limit equality", page)
+                self.assertNotIn("Cold responses at 3-token limit", page)
 
     def test_output_limit_disclosure_counts_only_measured_output_tokens(self):
         rows = [
@@ -659,24 +633,10 @@ class GatewayProbeFamilyTests(_SiteFixture):
         )
 
         page = site._gateway_probe_board(bundle)
-        self.assertIn(
-            "Retry evidence: 4/8 first-attempt successes, "
-            "6/8 eventual successes, 4 retried, 2 rescued, 2 exhausted",
-            page,
-        )
-        self.assertIn("12 physical attempts across 8 logical requests", page)
-        self.assertIn("First → eventual success", page)
-        self.assertIn("Retried / rescued / exhausted", page)
-        self.assertIn("1 attempt: 2", page)
-        self.assertIn("2 attempts: 2", page)
-        self.assertIn("Retry-After 2", page)
-        self.assertIn("1.500s median · 1.500s max", page)
-        self.assertIn("actual waits 2", page)
-        self.assertIn("1.600s median · 1.600s max", page)
-        self.assertIn("completion 2.500s median · 2.500s max", page)
-        self.assertIn("1/2 equal 3 tokens", page)
-        self.assertIn("results.jsonl retains every attempts[]", page)
-        self.assertIn("Configured request output limit: 3 tokens", page)
+        self.assertNotIn("Retry evidence:", page)
+        self.assertNotIn("physical attempts across", page)
+        self.assertNotIn("First → eventual success", page)
+        self.assertNotIn("Configured request output limit", page)
 
     def test_retry_summary_rejects_partial_or_malformed_evidence(self):
         base = {
@@ -834,6 +794,16 @@ class GatewayProbeFamilyTests(_SiteFixture):
         self.assertIn("positive means slower/worse", paired)
         self.assertIn("negative means faster/better", paired)
         self.assertNotIn(">vs direct<", paired)
+        self.assertLess(
+            page.index("Gateway leaderboard"),
+            page.index("Cold requests"),
+        )
+        self.assertGreater(
+            page.index("Completion integrity"),
+            page.index("Paired request deltas"),
+        )
+        self.assertNotIn("Retry evidence:", page)
+        self.assertNotIn("Configured output-limit equality", page)
 
     def test_probe_route_labels_hide_provider_suffix(self):
         labels = {
@@ -1582,7 +1552,7 @@ class DesignContractTests(_SiteFixture):
         gateway_title, gateway_deck, gateway_facts = site._lede(
             doc, "gateway"
         )
-        self.assertEqual(gateway_title, "Managed AI gateway benchmarks")
+        self.assertEqual(gateway_title, "AI gateway benchmarks")
         self.assertEqual(gateway_facts, [
             "1 published bundle",
             "1 benchmarked model",

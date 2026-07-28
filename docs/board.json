@@ -4361,11 +4361,11 @@
             }
           }
         },
-        "run_note": "Five routes, each with 50 cold and 50 warm measured requests. Warm measurements include a separate primer. Up to three total attempts were allowed for transient pre-token failures, but all 500 measured requests succeeded on their first attempt. The output safety limit was 4,096 tokens and no measured response reached it. Routes use rolling Kimi K3 aliases.",
+        "run_note": "Five routes, each with 50 cold and 50 warm measured requests. Warm measurements include a separate primer. Routes use rolling Kimi K3 aliases.",
         "schedule_digest": "07d421331cd2a61539e7cb4cb3d3ff5de3dfc2ed16cc91d85292e71efd60b01c",
         "scheduled_blocks_per_condition": 50,
         "submitter": "OpenBench",
-        "title": "Kimi K3 managed Gateway Bench, 100 requests per route",
+        "title": "Kimi K3 Gateway Bench, 100 requests per route",
         "track": "request_probe",
         "verified_with_commit": "cc47ef5d6923c6be4144be361573a475c88ab88b"
       }

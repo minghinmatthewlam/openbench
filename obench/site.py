@@ -1634,7 +1634,7 @@ def _lede(doc, family="harness"):
         if not gateway_bundles:
             return (
                 "AI gateway request benchmarks",
-                "Measures managed AI gateway routes one model request at a "
+                "Measures AI gateway routes one model request at a "
                 "time under separately scheduled cold and warm conditions.",
                 ["0 published request bundles"],
             )
@@ -1661,9 +1661,9 @@ def _lede(doc, family="harness"):
         if dates:
             facts.append(f"updated {dates[-1]}")
         return (
-            "Managed AI gateway benchmarks",
+            "AI gateway benchmarks",
             "Compares request latency, throughput, and reliability across "
-            "managed AI gateways under separately scheduled cold and warm "
+            "AI gateways under separately scheduled cold and warm "
             "conditions. Select a model below; each bundle keeps its own "
             "request counts and matched-block denominators.",
             facts,
@@ -1673,7 +1673,7 @@ def _lede(doc, family="harness"):
         "OpenBench benchmark results",
         "Digest-verified benchmark releases, methodology, and project "
         "information.",
-        ["coding-agent harnesses", "managed AI gateway routes"],
+        ["coding-agent harnesses", "AI gateway routes"],
     )
 
 
@@ -2885,12 +2885,6 @@ def _gateway_probe_board(bundle):
         + _tag("div", {"class": "meta"}, meta)
         + _tag(
             "p",
-            {},
-            "Request-level benchmark. Cold and warm conditions retain "
-            "separate denominators from Harness Bench cells.",
-        )
-        + _tag(
-            "p",
             {
                 "class": (
                     "evidence-depth is-spike" if is_spike else "evidence-depth"
@@ -2917,6 +2911,7 @@ def _gateway_probe_board(bundle):
     )
 
     completion_integrity = bundle.get("completion_integrity")
+    completion_section = ""
     if completion_integrity:
         completion_rows = []
         integrity_arms = completion_integrity.get("arms") or {}
@@ -2980,7 +2975,7 @@ def _gateway_probe_board(bundle):
                 "cell": primer_coverage,
             },
         ]
-        head += (
+        completion_section = (
             _tag(
                 "div",
                 {"class": "head"},
@@ -2988,234 +2983,16 @@ def _gateway_probe_board(bundle):
                 + _tag(
                     "p",
                     {},
-                    "Explicit stream finish reasons only. Measured requests "
-                    "are counted as stop (natural-stop), length, missing, or "
-                    "other; missing is never treated as stop. Warm-primer "
-                    "coverage is stop / warm-primer rows.",
+                    "Provider-reported completion reasons. Natural stop means "
+                    "the response ended normally; length means the provider "
+                    "reported a length-based termination, commonly an output "
+                    "or context limit; missing means no finish reason was "
+                    "reported; other covers any remaining explicit reason. "
+                    "Warm-primer natural stop shows whether the separate "
+                    "connection-warming request ended normally.",
                 ),
             )
             + _render_table(completion_columns, completion_rows)
-        )
-
-    retry_summary = bundle.get("retry_summary")
-    if retry_summary:
-        overall = retry_summary["overall"]
-
-        def fraction(value, total):
-            return f"{value}/{total}"
-
-        def attempt_distribution(value):
-            return " · ".join(
-                f"{count} attempt{'s' if count != '1' else ''}: {frequency}"
-                for count, frequency in value.items()
-            )
-
-        def timing(value):
-            if value.get("count") == 0:
-                return "—"
-            return (
-                f"{value['median']:.3f}s median · "
-                f"{value['max']:.3f}s max"
-            )
-
-        def retry_after_cell(row):
-            observed = row["retry_after_s"]
-            waits = row["wait_actual_s"]
-            return (
-                f"Retry-After {observed['count']}"
-                + (
-                    "<br>" + _tag(
-                        "span", {"class": "sub"}, timing(observed)
-                    )
-                    if observed["count"] else ""
-                )
-                + f"<br>actual waits {waits['count']}"
-                + (
-                    "<br>" + _tag(
-                        "span", {"class": "sub"}, timing(waits)
-                    )
-                    if waits["count"] else ""
-                )
-            )
-
-        def recovery_cell(row):
-            if row["retried"] == 0:
-                return "—"
-            return (
-                "completion " + timing(row["recovery_completion_s"])
-                + "<br>"
-                + _tag(
-                    "span",
-                    {"class": "sub"},
-                    "final attempt start "
-                    + timing(row["final_attempt_start_offset_s"]),
-                )
-            )
-
-        def output_limit_cell(row):
-            values = []
-            for limit, counts in row["output_limits"].items():
-                values.append(
-                    f"{counts['equal']}/{counts['measured']} equal "
-                    f"{limit} tokens"
-                )
-            return "<br>".join(values) if values else "—"
-
-        retry_columns = [
-            {
-                "label": "Route",
-                "cls": "name",
-                "type": "str",
-                "dir": "asc",
-                "cell": lambda row: _gateway_route_cell(row["arm_id"]),
-                "key": lambda row: _gateway_probe_route_name(row["arm_id"]),
-            },
-            {
-                "label": "Condition",
-                "type": "str",
-                "dir": "asc",
-                "cell": lambda row: _esc(row["condition"]),
-                "key": lambda row: row["condition"],
-            },
-            {
-                "label": "First → eventual success",
-                "cell": lambda row: (
-                    fraction(
-                        row["first_attempt_successes"],
-                        row["logical_cells"],
-                    )
-                    + " → "
-                    + fraction(
-                        row["eventual_successes"],
-                        row["logical_cells"],
-                    )
-                ),
-            },
-            {
-                "label": "Retried / rescued / exhausted",
-                "cell": lambda row: (
-                    f"{row['retried']} / {row['rescued']} / "
-                    f"{row['exhausted']}"
-                ),
-            },
-            {
-                "label": "Attempt distribution",
-                "cell": lambda row: attempt_distribution(
-                    row["attempt_distribution"]
-                ),
-            },
-            {
-                "label": "Retry-After / wait",
-                "cell": retry_after_cell,
-            },
-            {
-                "label": "Recovery timing",
-                "cell": recovery_cell,
-            },
-            {
-                "label": "Output-limit equality",
-                "cell": output_limit_cell,
-            },
-        ]
-        head += _tag(
-            "details",
-            {"class": "caveats retry-evidence"},
-            _tag(
-                "summary",
-                {},
-                (
-                    f"Retry evidence: {overall['first_attempt_successes']}/"
-                    f"{overall['logical_cells']} first-attempt successes, "
-                    f"{overall['eventual_successes']}/"
-                    f"{overall['logical_cells']} eventual successes, "
-                    f"{overall['retried']} retried, "
-                    f"{overall['rescued']} rescued, "
-                    f"{overall['exhausted']} exhausted"
-                ),
-            )
-            + _tag(
-                "p",
-                {},
-                f"{overall['attempts']} physical attempts across "
-                f"{overall['logical_cells']} logical requests. "
-                "Output-limit equality is a cap-hit proxy, not proof of "
-                "truncation. The linked results.jsonl retains every attempts[] "
-                "record, Retry-After decision, recovery timestamp, and retry "
-                "billing field.",
-            )
-            + _render_table(retry_columns, retry_summary["groups"]),
-        )
-
-    output_limit_equalities = bundle.get("output_token_limit_equalities")
-    if output_limit_equalities:
-        configured_limit = output_limit_equalities["configured_limit"]
-        equality_rows = []
-        for arm in bundle["arms"]:
-            arm_id = arm["arm_id"]
-            conditions = (
-                output_limit_equalities.get("arms", {}).get(arm_id) or {}
-            )
-            equality_rows.append({
-                "arm_id": arm_id,
-                "cold": conditions.get("cold") or {},
-                "warm": conditions.get("warm") or {},
-            })
-
-        def equality_cell(value):
-            equal = value.get("equal")
-            measured = value.get("measured")
-            if equal is None or measured is None:
-                return "—"
-            return f"{equal}/{measured}"
-
-        equality_columns = [
-            {
-                "label": "Route",
-                "cls": "name",
-                "type": "str",
-                "dir": "asc",
-                "cell": lambda row: _gateway_route_cell(row["arm_id"]),
-                "key": lambda row: _gateway_probe_route_name(row["arm_id"]),
-            },
-            {
-                "label": (
-                    f"Cold responses at {configured_limit}-token limit"
-                ),
-                "cell": lambda row: equality_cell(row["cold"]),
-            },
-            {
-                "label": (
-                    f"Warm responses at {configured_limit}-token limit"
-                ),
-                "cell": lambda row: equality_cell(row["warm"]),
-            },
-        ]
-        head += (
-            _tag(
-                "div",
-                {"class": "head"},
-                _tag("h2", {}, "Configured output-limit equality")
-                + _tag(
-                    "p",
-                    {},
-                    f"Configured request output limit: {configured_limit} tokens. "
-                    "Counts are measured rows whose output_tokens equal the "
-                    "configured limit. This is a secondary legacy/cap "
-                    "diagnostic. Equality is a cap proxy, not proof of "
-                    "truncation. "
-                    + (
-                        "Explicit finish reasons are reported separately in "
-                        "Completion integrity; missing reasons are not inferred. "
-                        if completion_integrity
-                        else
-                        "Because finish reasons are not retained in this "
-                        "legacy bundle, no completion reason is inferred. "
-                    )
-                    + "Stream-total latency and measured or charged cost are "
-                    "generation-length affected.",
-                ),
-            )
-            + _render_table(equality_columns, equality_rows)
         )
 
     def summary(item, name):
@@ -3485,6 +3262,8 @@ def _gateway_probe_board(bundle):
             ),
         )
         parts += _render_table(contrast_columns, contrast_rows)
+
+    parts += completion_section
 
     links = "".join(filter(None, [
         _tag("span", {}, _link(bundle["results_path"], "results.jsonl"))
@@ -3822,7 +3601,7 @@ def render_board_html(doc):
     social_metadata += (
         '<meta property="og:type" content="website">'
         '<meta property="og:title" content="OpenBench gateway benchmarks">'
-        '<meta property="og:description" content="Digest-verified managed AI '
+        '<meta property="og:description" content="Digest-verified AI '
         'gateway benchmark results.">'
         '<meta name="twitter:card" content="summary_large_image">'
     )
