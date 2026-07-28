@@ -466,12 +466,19 @@ def build_gateway_family(site_dir, gateway_dirs=None):
     }
 
 
-def gateway_probe_verification_error(bundle_dir):
-    """Return a fail-closed public Probe verification error, else ``None``."""
-    from . import gateway_probe_publish
+def _verify_gateway_probe_bundle(bundle_dir, manifest_entry=None):
+    from . import gateway_probe_legacy_v3, gateway_probe_publish
 
+    entry = manifest_entry or {}
+    if entry.get("legacy_schema_version") == 3:
+        return gateway_probe_legacy_v3.verify_bundle(bundle_dir)
+    return gateway_probe_publish.verify_bundle(bundle_dir)
+
+
+def gateway_probe_verification_error(bundle_dir, manifest_entry=None):
+    """Return a fail-closed public Probe verification error, else ``None``."""
     try:
-        gateway_probe_publish.verify_bundle(bundle_dir)
+        _verify_gateway_probe_bundle(bundle_dir, manifest_entry)
     except Exception as exc:  # noqa: BLE001 - surface any verifier rejection
         return f"bundle verification failed: {exc}"
     return None
@@ -790,10 +797,8 @@ def aggregate_gateway_probe_bundle(
     bundle_dir, *, site_dir=None, manifest_entry=None
 ):
     """Project one verified public Gateway Probe report-v4 bundle for the site."""
-    from . import gateway_probe_publish
-
     try:
-        manifest = gateway_probe_publish.verify_bundle(bundle_dir)
+        manifest = _verify_gateway_probe_bundle(bundle_dir, manifest_entry)
         with open(
             os.path.join(bundle_dir, "experiment.json"),
             encoding="ascii",
@@ -843,9 +848,10 @@ def aggregate_gateway_probe_bundle(
         rows,
         expected_output_limit=configured_output_limit,
     )
-    output_limit_equalities = _output_token_limit_equalities(
-        rows,
-        configured_output_limit,
+    output_limit_equalities = (
+        _output_token_limit_equalities(rows, configured_output_limit)
+        if manifest.get("result_schema_version") == 4
+        else None
     )
     completion_integrity = _gateway_probe_completion_integrity(rows)
     bundle_id = entry.get("id") or os.path.basename(os.path.normpath(bundle_dir))
@@ -862,6 +868,7 @@ def aggregate_gateway_probe_bundle(
         "title": _public_gateway_title(entry.get("title") or bundle_id),
         "model": entry.get("model") or entry.get("title") or bundle_id,
         "date": entry.get("date") or "",
+        "result_schema_version": manifest.get("result_schema_version"),
         "path": entry.get("path"),
         "link": entry.get("link"),
         "submitter": entry.get("submitter"),
@@ -925,7 +932,8 @@ def build_gateway_probe_family(site_dir, gateway_probe_dirs=None):
             if real in seen:
                 continue
             seen.add(real)
-            error = gateway_probe_verification_error(bundle_dir)
+            entry = manifest.get(name)
+            error = gateway_probe_verification_error(bundle_dir, entry)
             if error:
                 skipped.append({
                     "id": name,
@@ -936,7 +944,7 @@ def build_gateway_probe_family(site_dir, gateway_probe_dirs=None):
             aggregated = aggregate_gateway_probe_bundle(
                 bundle_dir,
                 site_dir=site_dir,
-                manifest_entry=manifest.get(name),
+                manifest_entry=entry,
             )
             if aggregated is None:
                 skipped.append({

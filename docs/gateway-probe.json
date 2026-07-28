@@ -4,7 +4,8 @@
     "title": "GPT-4o mini Gateway Bench",
     "model": "GPT-4o mini",
     "date": "2026-07-27",
-    "submitter": "OpenBench"
+    "submitter": "OpenBench",
+    "legacy_schema_version": 3
   },
   {
     "id": "2026-07-28-kimi-k3-managed-100",

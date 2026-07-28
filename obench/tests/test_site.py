@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from obench import gateway_probe_publish, publish, site
@@ -189,6 +190,35 @@ class GatewayFamilyTests(_SiteFixture):
 
 
 class GatewayProbeFamilyTests(_SiteFixture):
+    def test_checked_in_models_publish_kimi_first_and_gpt4o_as_v3(self):
+        repo_docs = str(Path(__file__).resolve().parents[2] / "docs")
+
+        doc = site.build_board(repo_docs)
+        bundles = doc["gateway"]["bundles"]
+
+        self.assertEqual(
+            [bundle["model"] for bundle in bundles[:2]],
+            ["Kimi K3", "GPT-4o mini"],
+        )
+        self.assertEqual(bundles[0]["result_schema_version"], 4)
+        self.assertEqual(bundles[1]["result_schema_version"], 3)
+        self.assertIsNone(bundles[1]["retry_summary"])
+        self.assertIsNone(bundles[1]["completion_integrity"])
+        self.assertIsNone(bundles[1]["output_token_limit_equalities"])
+        page = site.render_board_html(doc)
+        self.assertIn(
+            'id="gateway-model-tab-2026-07-28-kimi-k3-managed-100" '
+            'aria-controls="gateway-model-panel-2026-07-28-kimi-k3-managed-100" '
+            'aria-selected="true"',
+            page,
+        )
+        self.assertIn(
+            'id="gateway-model-tab-2026-07-27-gpt4o-mini-managed-30" '
+            'aria-controls="gateway-model-panel-2026-07-27-gpt4o-mini-managed-30" '
+            'aria-selected="false"',
+            page,
+        )
+
     def _publish_probe(self, bundle_id="probe-v4"):
         from obench.tests.test_gateway_probe_publish import (
             TEST_COMMIT,
@@ -603,6 +633,7 @@ class GatewayProbeFamilyTests(_SiteFixture):
         manifest = {
             "verification": {"verified_with_commit": "f" * 40},
             "result_count": len(rows),
+            "result_schema_version": 4,
         }
         with mock.patch.object(
             gateway_probe_publish, "verify_bundle", return_value=manifest
