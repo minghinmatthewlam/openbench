@@ -178,3 +178,34 @@ including Terminal-Bench 2, require a separately provisioned validation lane.
 - Transcripts are local-only and never published unscrubbed (`obench/scrub.py`).
 - Committed datasets live under `data/`; local scratch stays in gitignored
   `results/`.
+
+## Cursor Cloud specific instructions
+
+Setup is `pip install -e .` (stdlib-only, no third-party deps). The full
+offline dev/CI loop is the "Always-run CI (offline)" block above — don't
+duplicate those commands; use them as-is.
+
+Non-obvious gotchas for this environment:
+
+- **`obench` console script is not on PATH by default.** `pip install -e .`
+  installs it to `~/.local/bin`, which is not on the default `PATH`. Either run
+  `python3 -m obench ...` or prepend `export PATH="$HOME/.local/bin:$PATH"`.
+- **The VM hostname is `cursor`, which breaks the publish/site/leaderboard
+  tests.** `obench/scrub.py` treats the machine hostname as PII to redact, and
+  `cursor` is also a stock harness name that legitimately appears in generated
+  leaderboard/publish HTML. So the PII scanner trips (`[hostname] cursor` hit),
+  causing ~79 errors + 1 failure in `test_publish` / `test_site` /
+  `test_leaderboard` (and thus in a full `python3 -m unittest discover`). This
+  is an environmental coincidence, not a code defect. To get a fully green
+  suite, run under a non-`cursor` hostname first: `sudo hostname openbench-dev`
+  (does not persist across VM restarts, so re-apply each session).
+- **No linter is configured** (no ruff/flake8/black/mypy). The lint-equivalent
+  correctness gate is `obench validate` (task checker polarity: workspace FAILs,
+  solution PASSes).
+- **Offline "hello world" / smoke of the run pipeline:** use the built-in
+  `null` negative-control harness, which makes no external calls —
+  `obench legacy run --task make-it-run --harness null --results-path results/results.jsonl`
+  then `obench report --results-path results/results.jsonl`. It correctly
+  records `success=False` (the checker is the sole judge). A real `obench run`
+  suite additionally needs Harbor + Docker + installed harness CLIs + provider
+  auth, none of which exist in the offline dev environment.
