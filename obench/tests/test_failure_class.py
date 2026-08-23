@@ -137,6 +137,25 @@ class TestClassifyFailure(unittest.TestCase):
         self.assertEqual(failure_class.classify_failure_reason(row, ""),
                          "silent-no-model-call")
 
+    def test_incomplete_zero_work_run_is_infra_not_wrong_answer(self):
+        # Real shape from an OpenRouter provider-overload abandonment: the model
+        # answered "high demand / Reconnecting 1..5/5" for minutes, then exited
+        # with no work done. completed=False, no tokens/turns, workspace
+        # untouched, and it did NOT ride the cap (419s of a 2400s budget). The
+        # throttle text lives only in the transcript, not in any row field, so
+        # marker matching cannot see it -- the structural no-work shape must.
+        row = {"success": False, "completed": False, "checker_exit": 1,
+               "tokens": None, "tokens_output": None, "turns": None,
+               "workspace_changed": False, "wall_time_s": 419.68, "error": "exit 1"}
+        self.assertEqual(failure_class.classify_failure(row, "", timeout_s=2400), "infra")
+
+    def test_incomplete_run_that_did_work_is_not_swallowed_as_infra(self):
+        # Guard: a cell cut off AFTER real model work (tokens/turns) must not be
+        # reclassified by the zero-work gate -- only genuine no-work runs are infra.
+        row = {"success": False, "completed": False, "checker_exit": 1,
+               "tokens": 500, "tokens_output": 200, "turns": 8, "wall_time_s": 419.0}
+        self.assertNotEqual(failure_class.classify_failure(row, "", timeout_s=2400), "infra")
+
     def test_real_wrong_answer_with_tokens_stays_wrong_answer(self):
         row = {"success": False, "completed": True, "checker_exit": 1,
                "tokens": 100, "tokens_output": 25}

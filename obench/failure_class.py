@@ -121,6 +121,45 @@ def has_instant_cli_exit_shape(row):
     return float(wall) < 30.0
 
 
+def has_no_work_incomplete_shape(row, text=""):
+    """True for a measured incomplete run with zero evidence the model worked.
+
+    Generalizes ``has_instant_cli_exit_shape`` beyond its <30s window. A run that
+    explicitly did NOT complete, reported no tokens across every field, ran no
+    turns, and left the workspace untouched is a harness/provider abandonment --
+    an auth reject, a dropped connection, or a provider-overload retry loop that
+    answers "high demand / Reconnecting 1..5/5" for minutes before exiting. It
+    burns real wall time, so the instant-exit gate (too slow) and the cap-rider
+    gate (never reached the cap) both miss it, and its throttle text is written to
+    the transcript rather than the saved row fields -- so a structural no-work
+    shape catches it where marker matching cannot.
+
+    The gate demands POSITIVE evidence of an abandoned run rather than mere
+    absence of telemetry: ``completed`` explicitly False and a numeric
+    ``wall_time_s``. A sparse/old row simply missing those fields is not swallowed
+    (that would clobber a backfilled class), and meaningful transcript text or any
+    timeout signal (handled before this gate) keeps the cell out. Callers must
+    invoke this AFTER the timeout classification so a real timeout still wins.
+    """
+    row = row or {}
+    if row.get("harness") == "null":
+        return False
+    if row.get("completed") is not False or bool(row.get("success")):
+        return False
+    wall = row.get("wall_time_s")
+    if not isinstance(wall, (int, float)) or isinstance(wall, bool):
+        return False
+    if any(row.get(field) for field in _TOKEN_FIELDS):
+        return False
+    if row.get("turns") not in (None, 0):
+        return False
+    if _has_workspace_work_evidence(row):
+        return False
+    if len(_meaningful_work_text(text)) >= 200:
+        return False
+    return True
+
+
 def per_reply_outputs(row):
     """Per-REQUEST output token counts for a cell, or () if unavailable.
 
@@ -503,6 +542,12 @@ def classify_failure(row, adapter_output="", timeout_s=None):
         return "infra"
     if row.get("checker_exit") == "timeout" or _TIMEOUT_RE.search(structured_status) or rode_cap:
         return "timeout"
+    # After timeout handling: a measured incomplete run that did zero work (no
+    # tokens, no turns, untouched workspace) and did not ride the cap is a
+    # provider abandonment -- e.g. an OpenRouter overload retry loop that gave up
+    # after minutes. The model never answered, so this is infra, not wrong_answer.
+    if has_no_work_incomplete_shape(row, combined):
+        return "infra"
     # wrong_answer must be checker-owned (exit 1). A row with NO checker exit
     # whose error is a Python traceback means the runner's own checker path
     # raised (evidence capture, scrub, or run_checker itself) -- that measures
