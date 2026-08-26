@@ -170,6 +170,11 @@ def resolve_groups(
             "tasks": list(tg.get("tasks", [])),
             "tasks_dir": resolve_group_tasks_dir(tg, spec, spec_dir),
             "exec_mode": tg.get("exec_mode") or default_exec_mode,
+            # Per-group timeout override (None -> use the spec-global timeout).
+            # A small algorithmic task and a large agentic task in the same spec
+            # need very different budgets; one global timeout either starves the
+            # big task or wastes wall-time on a hung small one.
+            "timeout": tg.get("timeout"),
         })
     return groups
 
@@ -234,6 +239,7 @@ def expand_cells_grouped(
                         "run_id": run_id,
                         "tasks_dir": group.get("tasks_dir"),
                         "exec_mode": group.get("exec_mode", "local"),
+                        "timeout": group.get("timeout"),
                     })
     return cells
 
@@ -464,6 +470,46 @@ def row_failure_class(row: dict[str, Any] | None) -> str | None:
     return None
 
 
+def load_cumulative_wall(results_path: str) -> dict[str, float]:
+    """Total wall-clock seconds spent across ALL attempts of each run_id.
+
+    Unlike ``load_results_snapshot`` (latest row per id), this sums ``wall_time_s``
+    over every row so a cell's cumulative retry cost can be capped. A cell that
+    keeps timing out under throttle otherwise re-burns a full timeout on every
+    re-queue -- observed once as ~947 requests / ~9h on a single cell.
+    """
+    totals: dict[str, float] = {}
+    if not os.path.isfile(results_path):
+        return totals
+    with open(results_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            rid = row.get("run_id")
+            wall = row.get("wall_time_s")
+            if rid and isinstance(wall, (int, float)):
+                totals[rid] = totals.get(rid, 0.0) + float(wall)
+    return totals
+
+
+def wall_cap_exceeded(cumulative_wall_s: float, max_cell_wall_s: float | None) -> bool:
+    """True when a cell has already spent its allowed cumulative wall time.
+
+    ``max_cell_wall_s`` is ``None`` -> the cap is disabled and this never fires,
+    so existing specs keep their current unbounded-retry behavior.
+    """
+    if max_cell_wall_s is None:
+        return False
+    return cumulative_wall_s >= max_cell_wall_s
+
+
 # ── Backoff ──────────────────────────────────────────────────────────────
 
 def backoff_for_failure(fc: str | None, attempt: int,
@@ -487,6 +533,7 @@ def build_runner_command(
     timeout: int,
     stall_timeout: int | None,
     exec_mode: str,
+    allow_version_drift: bool = False,
 ) -> list[str]:
     """Build the ``obench run`` subprocess argv for one cell.
 
@@ -500,6 +547,9 @@ def build_runner_command(
     """
     effective_tasks_dir = cell.get("tasks_dir", tasks_dir)
     effective_exec_mode = cell.get("exec_mode", exec_mode)
+    # A cell carrying its own timeout (from a task group's override) wins over
+    # the spec-global default; None/0 falls back to the caller's timeout.
+    effective_timeout = cell.get("timeout") or timeout
     cmd = [sys.executable, "-m", DEFAULT_RUNNER_MODULE]
     cmd.extend([
         "--force",  # always re-run even if run_id exists (prior excluded rows)
@@ -507,13 +557,19 @@ def build_runner_command(
         "--model", cell["model"],
         "--task", cell["task"],
         "--trial", str(cell["trial"]),
-        "--timeout", str(timeout),
+        "--timeout", str(effective_timeout),
         "--results-path", results_path,
     ])
     if effective_tasks_dir:
         cmd.extend(["--tasks-dir", effective_tasks_dir])
     if effective_exec_mode == "docker":
         cmd.extend(["--exec", "docker"])
+    if allow_version_drift:
+        # Uniform waiver across every arm: a local run against a host CLI newer
+        # than the Dockerfile pin. Each row records version_drift=true, so the
+        # off-pin state is annotated rather than silently bumping the pin (which
+        # is coupled to tests, docker image-contexts, and docs).
+        cmd.append("--allow-version-drift")
     if stall_timeout is not None:
         cmd.extend(["--stall-timeout", str(stall_timeout)])
     # Enable proxy for stall-kill support (required for stall-timeout to work)
@@ -577,6 +633,11 @@ def run_matrix(spec: dict[str, Any], spec_dir: str, cwd: str) -> int:
     timeout = spec.get("timeout", 2400)
     exec_mode = spec.get("exec_mode", "local")
     trials = spec.get("trials", 1)
+    # Cap the cumulative wall time a single cell may spend across retries. None
+    # (default) leaves retries bounded only by the per-class retry budget, which
+    # lets a throttle-dominated cell re-burn a full timeout on every re-queue.
+    max_cell_wall_s = spec.get("max_cell_wall_s")
+    allow_version_drift = bool(spec.get("allow_version_drift", False))
     stall_timeout = spec.get("stall_timeout") or (
         int(os.environ.get("OPENBENCH_STALL_TIMEOUT", "0")) or None
     )
@@ -726,11 +787,14 @@ def run_matrix(spec: dict[str, Any], spec_dir: str, cwd: str) -> int:
             print(f"    BACKOFF {run_id} attempt={attempt}/{budget} fc={fc} wait={delay:.0f}s")
             time.sleep(delay)
 
-        # Run the cell
+        # Run the cell. A per-group timeout override (carried on the cell) sets
+        # both the runner's --timeout and this outer kill budget.
         print(f"    RUN    {run_id}", flush=True)
+        cell_timeout = cell.get("timeout") or timeout
         cmd = build_runner_command(
-            cell, results_path, None, timeout, stall_timeout, exec_mode)
-        rc, stderr_tail = run_runner(cmd, timeout + 60)
+            cell, results_path, None, timeout, stall_timeout, exec_mode,
+            allow_version_drift=allow_version_drift)
+        rc, stderr_tail = run_runner(cmd, cell_timeout + 60)
 
         if rc != 0:
             print(f"    WARN runner exit={rc} for {run_id}", file=sys.stderr)
@@ -774,7 +838,17 @@ def run_matrix(spec: dict[str, Any], spec_dir: str, cwd: str) -> int:
                 # Re-queue if budget allows
                 budget_remaining = as_.retries_remaining(
                     new_fc, retry_counts.get(run_id, 0))
-                if budget_remaining > 0:
+                # A throttle-dominated cell classifies rate_limited yet burns a
+                # full timeout every attempt; the per-class retry budget alone
+                # lets it re-burn that timeout many times. Stop once its
+                # cumulative wall time crosses the cap, even with budget left.
+                cell_wall = load_cumulative_wall(results_path).get(run_id, 0.0)
+                if wall_cap_exceeded(cell_wall, max_cell_wall_s):
+                    if run_id not in as_.exhausted_cells:
+                        as_.exhausted_cells.append(run_id)
+                    print(f"    EXHAUSTED {run_id} (fc={new_fc} wall cap: "
+                          f"{cell_wall:.0f}s >= {max_cell_wall_s}s)")
+                elif budget_remaining > 0:
                     pending.insert(0, (arm_name, arm_idx, cell))
                     print(f"    RE-QUEUED {run_id} (fc={new_fc} retry={budget_remaining} left)")
                 else:
@@ -861,6 +935,12 @@ def missing_task_images(spec, spec_dir, docker_runner=None):
     missing = []
     for group in spec.get("task_group") or []:
         tasks_dir = resolve_group_tasks_dir(group, spec, spec_dir)
+        # A group that omits tasks_dir defers resolution to the runner (config or
+        # discovery) and pins no per-task docker image, so there is nothing to
+        # preflight here. Skipping it also avoids os.path.join(None, ...), which
+        # otherwise crashes an entirely local spec before any cell runs.
+        if tasks_dir is None:
+            continue
         for task in group.get("tasks") or []:
             toml_path = os.path.join(tasks_dir, task, "task.toml")
             if not os.path.isfile(toml_path):

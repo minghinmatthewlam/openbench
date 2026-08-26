@@ -393,6 +393,34 @@ class RunnerCommandBuildingTests(unittest.TestCase):
         # proxy is only added when stall_timeout is set
         self.assertNotIn("--proxy", cmd)
 
+    def test_version_drift_flag_omitted_by_default(self):
+        cell = {"harness": "codex", "model": "a", "task": "t1", "trial": 1}
+        cmd = mq.build_runner_command(cell, "r.jsonl", "/t", 2400, None, "local")
+        self.assertNotIn("--allow-version-drift", cmd)
+
+    def test_version_drift_flag_passed_when_requested(self):
+        cell = {"harness": "codex", "model": "a", "task": "t1", "trial": 1}
+        cmd = mq.build_runner_command(
+            cell, "r.jsonl", "/t", 2400, None, "local", allow_version_drift=True)
+        self.assertIn("--allow-version-drift", cmd)
+
+
+class MissingTaskImagesTests(unittest.TestCase):
+    """Preflight for pinned per-task docker images."""
+
+    def test_local_group_without_tasks_dir_is_skipped_not_crashed(self):
+        # A local task group omits tasks_dir (runner resolves via discovery) and
+        # pins no docker image. The preflight must skip it, not os.path.join a
+        # None tasks_dir -- that TypeError killed an all-local spec before any
+        # cell ran.
+        spec = {
+            "task_group": [{"tasks": ["make-it-run", "webcore"]}],
+        }
+        # docker_runner must never be consulted for a local group.
+        def _fail(_ref):
+            raise AssertionError("docker inspect should not run for a local group")
+        self.assertEqual(mq.missing_task_images(spec, "/spec/dir", docker_runner=_fail), [])
+
 
 class CoverageSummaryTests(unittest.TestCase):
     """Verify coverage output format."""
@@ -603,3 +631,65 @@ class CoverageCannotExceedPlannedTests(unittest.TestCase):
         # Re-adding the same cells after a resume must not inflate the count.
         restored.satisfied_cells.update({"a", "b"})
         self.assertEqual(restored.satisfied, 2)
+
+
+class PerGroupTimeoutTests(unittest.TestCase):
+    """A task group may set its own timeout, overriding the spec-global one."""
+
+    def test_cell_timeout_overrides_global(self):
+        cell = {"harness": "codex", "model": "m", "task": "t", "trial": 1, "timeout": 600}
+        cmd = mq.build_runner_command(cell, "r.jsonl", "/t", 2400, None, "local")
+        i = cmd.index("--timeout")
+        self.assertEqual(cmd[i + 1], "600")
+
+    def test_cell_without_timeout_uses_global(self):
+        cell = {"harness": "codex", "model": "m", "task": "t", "trial": 1}
+        cmd = mq.build_runner_command(cell, "r.jsonl", "/t", 2400, None, "local")
+        i = cmd.index("--timeout")
+        self.assertEqual(cmd[i + 1], "2400")
+
+    def test_resolve_groups_carries_group_timeout(self):
+        spec = {"task_group": [{"tasks": ["a"], "timeout": 600}, {"tasks": ["b"]}]}
+        groups = mq.resolve_groups(spec, "/spec", "local")
+        self.assertEqual(groups[0]["timeout"], 600)
+        self.assertIsNone(groups[1]["timeout"])
+
+    def test_expand_cells_grouped_carries_timeout(self):
+        arms = [{"harness": "codex", "model": "m"}]
+        groups = [{"tasks": ["a"], "tasks_dir": None, "exec_mode": "local", "timeout": 600}]
+        cells = mq.expand_cells_grouped(arms, groups, 1)
+        self.assertEqual(cells[0]["timeout"], 600)
+
+
+class CumulativeWallTests(unittest.TestCase):
+    """load_cumulative_wall sums wall_time_s across every attempt of a run_id."""
+
+    def test_sums_wall_across_attempts(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(json.dumps({"run_id": "a", "wall_time_s": 400}) + "\n")
+            f.write(json.dumps({"run_id": "a", "wall_time_s": 410}) + "\n")
+            f.write(json.dumps({"run_id": "b", "wall_time_s": 30}) + "\n")
+            path = f.name
+        try:
+            w = mq.load_cumulative_wall(path)
+            self.assertAlmostEqual(w["a"], 810)
+            self.assertAlmostEqual(w["b"], 30)
+        finally:
+            os.unlink(path)
+
+    def test_missing_file_is_empty(self):
+        self.assertEqual(mq.load_cumulative_wall("/no/such/file.jsonl"), {})
+
+
+class WallCapTests(unittest.TestCase):
+    """wall_cap_exceeded gates re-queue on cumulative retry wall time."""
+
+    def test_disabled_when_cap_none(self):
+        self.assertFalse(mq.wall_cap_exceeded(10_000, None))
+
+    def test_not_exceeded_below_cap(self):
+        self.assertFalse(mq.wall_cap_exceeded(100, 3600))
+
+    def test_exceeded_at_or_above_cap(self):
+        self.assertTrue(mq.wall_cap_exceeded(3600, 3600))
+        self.assertTrue(mq.wall_cap_exceeded(5000, 3600))
