@@ -49,12 +49,13 @@ class GatewayProbeCliTests(unittest.TestCase):
         self.assertNotIn("exploratory", stdout.getvalue())
         self.assertNotIn("confirmatory", stdout.getvalue())
 
-    def test_checked_in_minimal_and_five_way_examples_validate_through_cli(self):
+    def test_checked_in_examples_validate_through_cli(self):
         examples = Path(__file__).parents[1] / "examples"
         cases = (
             ("gateway-probe-responses.toml", "arms=2"),
             ("gateway-probe-five-way-responses.toml", "arms=5"),
             ("gateway-probe-kimi-k3-five-way-chat.toml", "arms=5"),
+            ("gateway-probe-glm-5.3-flash-four-way-chat.toml", "arms=4"),
         )
         for filename, expected in cases:
             with self.subTest(filename=filename):

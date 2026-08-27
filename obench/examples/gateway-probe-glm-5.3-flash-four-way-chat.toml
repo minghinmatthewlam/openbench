@@ -1,0 +1,117 @@
+schema_version = 1
+experiment_id = "glm-5.3-flash-four-way-chat-probe"
+track = "request_probe"
+model_match = "rolling_alias"
+repetitions = 50
+schedule_seed = 20260827
+allow_private_endpoint = false
+
+[budget]
+timeout_s = 180
+max_output_tokens = 4096
+usd_cap = 5.00
+max_total_attempts = 3
+max_input_tokens = 512
+retry_deadline_s = 480
+
+[[cases]]
+case_id = "short-text"
+prompt = "Reply with one short sentence describing a blue circle."
+
+[[arms]]
+arm_id = "direct-zai"
+route_kind = "direct"
+endpoint = "https://api.z.ai/api/paas/v4/chat/completions"
+protocol = "openai_chat"
+baseline = true
+canonical_model = "zai/glm-5.3-flash"
+requested_model = "glm-5.3-flash"
+requested_provider = "zai"
+allowed_models = ["glm-5.3-flash"]
+allowed_providers = ["zai"]
+fallback_enabled = false
+retry_count = 0
+cache_enabled = false
+auth_env = "ZAI_API_KEY"
+[arms.inference]
+thinking = "enabled"
+reasoning_effort = "max"
+[arms.sampling]
+temperature = 1.0
+top_p = 0.95
+seed = 20260827
+
+[[arms]]
+arm_id = "openrouter-zai"
+route_kind = "gateway"
+gateway = "openrouter"
+direct_control_arm_id = "direct-zai"
+endpoint = "https://openrouter.ai/api/v1/chat/completions"
+protocol = "openai_chat"
+baseline = false
+canonical_model = "zai/glm-5.3-flash"
+requested_model = "z-ai/glm-5.3-flash"
+requested_provider = "zai"
+allowed_models = ["z-ai/glm-5.3-flash"]
+allowed_providers = ["zai"]
+fallback_enabled = false
+retry_count = 0
+cache_enabled = false
+auth_env = "OPENROUTER_API_KEY"
+[arms.inference]
+thinking = "enabled"
+reasoning_effort = "max"
+[arms.sampling]
+temperature = 1.0
+top_p = 0.95
+seed = 20260827
+
+[[arms]]
+arm_id = "vercel-zai"
+route_kind = "gateway"
+gateway = "vercel"
+direct_control_arm_id = "direct-zai"
+endpoint = "https://ai-gateway.vercel.sh/v1/chat/completions"
+protocol = "openai_chat"
+baseline = false
+canonical_model = "zai/glm-5.3-flash"
+requested_model = "zai/glm-5.3-flash"
+requested_provider = "zai"
+allowed_models = ["zai/glm-5.3-flash"]
+allowed_providers = ["zai"]
+fallback_enabled = false
+retry_count = 0
+cache_enabled = false
+auth_env = "VERCEL_API_KEY"
+[arms.inference]
+thinking = "enabled"
+reasoning_effort = "max"
+[arms.sampling]
+temperature = 1.0
+top_p = 0.95
+seed = 20260827
+
+[[arms]]
+arm_id = "concentrate-zai"
+route_kind = "gateway"
+gateway = "concentrate"
+direct_control_arm_id = "direct-zai"
+endpoint = "https://api.concentrate.ai/v1/chat/completions"
+protocol = "openai_chat"
+baseline = false
+canonical_model = "zai/glm-5.3-flash"
+requested_model = "zai/glm-5.3-flash"
+requested_provider = "zai"
+allowed_models = ["zai/glm-5.3-flash"]
+allowed_providers = ["zai"]
+fallback_enabled = false
+retry_count = 0
+cache_enabled = false
+auth_env = "CONCENTRATE_API_KEY"
+[arms.inference]
+thinking = "enabled"
+reasoning_effort = "max"
+[arms.sampling]
+temperature = 1.0
+top_p = 0.95
+seed = 20260827
