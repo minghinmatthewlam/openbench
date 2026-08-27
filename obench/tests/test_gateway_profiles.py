@@ -77,11 +77,12 @@ class GatewayRequestProfileTests(unittest.TestCase):
             },
         )
 
-    def test_openrouter_maps_only_deepseek_to_its_request_provider_slug(self):
+    def test_openrouter_maps_provider_request_slugs(self):
         expected_slugs = {
             "deepseek": "DeepSeek",
             "openai": "openai",
             "moonshotai": "moonshotai",
+            "zai": "Z.AI",
         }
         for provider, expected_slug in expected_slugs.items():
             with self.subTest(provider=provider):
@@ -95,6 +96,16 @@ class GatewayRequestProfileTests(unittest.TestCase):
                     "only": [expected_slug],
                     "allow_fallbacks": False,
                 })
+
+    def test_zai_provider_aliases_match_gateway_evidence(self):
+        for observed in ("zai", "Z.AI", "z-ai"):
+            with self.subTest(observed=observed):
+                self.assertTrue(
+                    gateway_profiles.model_provider_matches(
+                        f"{observed}/glm-5.3-flash",
+                        "zai",
+                    )
+                )
 
     def test_rolling_alias_accepts_only_known_deepseek_release_alias(self):
         shorthand = "deepseek/deepseek-v4-flash-0731"

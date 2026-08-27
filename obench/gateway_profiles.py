@@ -37,9 +37,12 @@ _CONCENTRATE_PROVIDER_SLUGS = {
 }
 _OPENROUTER_PROVIDER_SLUGS = {
     "deepseek": "DeepSeek",
+    "zai": "Z.AI",
 }
 _PROVIDER_IDENTITY_ALIASES = {
     "moonshot ai": "moonshotai",
+    "z.ai": "zai",
+    "z-ai": "zai",
 }
 _MODEL_ID_ALIASES = {
     "deepseek-v4-flash-0731": "deepseek-v4-flash-20260731",
