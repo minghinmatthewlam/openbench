@@ -29,6 +29,7 @@ Notes / quirks:
   the raw output as the tail, never raising.
 """
 
+import importlib.util
 import json
 import os
 import shutil
@@ -150,6 +151,26 @@ OPEN_MODELS = {
     "laguna-s-2.1": {"provider": "openrouter", "model_id": "poolside/laguna-s-2.1", "base_url": "https://openrouter.ai/api/v1", "env_key": "OPENROUTER_API_KEY", "display": "OpenRouter Poolside Laguna S 2.1", "variant": "medium"},
     "inkling": {"provider": "openrouter", "model_id": "thinkingmachines/inkling", "base_url": "https://openrouter.ai/api/v1", "env_key": "OPENROUTER_API_KEY", "display": "OpenRouter Thinking Machines Inkling", "variant": "medium"},
 }
+
+
+def _load_open_models():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_open_models.py")
+    spec = importlib.util.spec_from_file_location("openbench_open_models", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The dict above is the default. An optional TOML registry
+# (``.openbench/open_models.toml`` or ``~/.openbench/open_models.toml``, see
+# ``_open_models.py``) may add entries or retune existing ones, so a user can
+# carry a BYO route without a diff against the adapter. ``OPEN_MODELS_SOURCE``
+# is the file it came from, or None when the built-ins are untouched.
+OPEN_MODELS, OPEN_MODELS_SOURCE = _load_open_models().load(
+    NAME, OPEN_MODELS,
+    required=("provider", "variant"),
+    defaults={"variant": "medium"},
+)
 
 
 def _unsupported(model):

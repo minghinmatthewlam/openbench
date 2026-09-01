@@ -377,9 +377,26 @@ def check_model(p, harness, model):
         return True, f"{model} -> {models[model]}"
     open_models = getattr(mod, "OPEN_MODELS", None)
     if isinstance(open_models, dict) and model in open_models:
-        return True, f"{model} -> {open_models[model]['model_id']} (open)"
+        origin = "open via registry" if getattr(mod, "OPEN_MODELS_SOURCE", None) else "open"
+        return True, f"{model} -> {open_models[model]['model_id']} ({origin})"
     known = list(models) + (list(open_models) if isinstance(open_models, dict) else [])
     return False, f"{model} not in MODELS/OPEN_MODELS {known}"
+
+
+def open_models_registry():
+    """Path of the open-model registry in effect, or None.
+
+    Returns the string ``"<error>: ..."`` rather than raising so preflight can
+    report a broken registry instead of dying on it.
+    """
+    path = os.path.join(ADAPTERS_DIR, "_open_models.py")
+    try:
+        spec = importlib.util.spec_from_file_location("doctor_open_models", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.find_registry()
+    except Exception as exc:  # noqa: BLE001 - surface any registry problem
+        return f"<error>: {exc}"
 
 
 def _keys_env_has(p, env_key):
@@ -1120,6 +1137,9 @@ def main(argv=None):
     print()
     print(f"Preflight: {'PASS' if ok else 'FAIL'} "
           f"({len(harnesses)} harness(es), model={args.model})")
+    registry = open_models_registry()
+    if registry:
+        print(f"Open-model registry: {registry}")
     return 0 if ok else 1
 
 

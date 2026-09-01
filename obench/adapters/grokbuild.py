@@ -25,6 +25,7 @@ observed stream, so token accounting also reads Grok's local
 HOME.  Turns are counted from terminal ``end`` events (single `-p` run => 1).
 """
 
+import importlib.util
 import json
 import os
 import shutil
@@ -79,6 +80,33 @@ OPEN_MODELS = {
     # placeholder; it is never an OpenAI API key.
     "gpt-5.6-sol":       {"model_id": "gpt-5.6-sol",       "base_url": "http://127.0.0.1:8317/v1",     "base_url_env": "CLIPROXYAPI_BASE_URL", "env_key": "CLIPROXYAPI_API_KEY", "display": "GPT-5.6 Sol via CLIProxyAPI", "proxy_route": "subbridge", "subscription_bridge": True},
 }
+
+
+def _grokbuild_route(entry):
+    """Fill the proxy route from the provider, as the built-ins do."""
+    if not entry.get("proxy_route") and entry.get("provider"):
+        entry = dict(entry, proxy_route="chat/%s" % entry["provider"])
+    return entry
+
+
+def _load_open_models():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_open_models.py")
+    spec = importlib.util.spec_from_file_location("openbench_open_models", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The dict above is the default. An optional TOML registry
+# (``.openbench/open_models.toml`` or ``~/.openbench/open_models.toml``, see
+# ``_open_models.py``) may add entries or retune existing ones, so a user can
+# carry a BYO route without a diff against the adapter. ``OPEN_MODELS_SOURCE``
+# is the file it came from, or None when the built-ins are untouched.
+OPEN_MODELS, OPEN_MODELS_SOURCE = _load_open_models().load(
+    NAME, OPEN_MODELS,
+    required=("proxy_route",),
+    derive=_grokbuild_route,
+)
 
 _SUBBRIDGE_PLACEHOLDER = "openbench-local-ingress"
 
