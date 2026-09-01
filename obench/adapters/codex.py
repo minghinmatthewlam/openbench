@@ -45,6 +45,7 @@ matches the vendor's own billed usage; there is no codex-native usage for these
 models to cross-check against.
 """
 
+import importlib.util
 import json
 import os
 import shlex
@@ -163,6 +164,26 @@ OPEN_MODELS = {
     "kimi-k2.7-code":    {"provider": "moonshot", "model_id": "kimi-k2.7-code",    "base_url": "https://api.moonshot.ai/v1",   "env_key": "MOONSHOT_API_KEY", "display": "Moonshot Kimi", "effort": "medium"},
     "kimi-k3":    {"provider": "moonshot", "model_id": "kimi-k3",    "base_url": "https://api.moonshot.ai/v1",   "env_key": "MOONSHOT_API_KEY", "display": "Moonshot Kimi K3", "effort": "medium"},
 }
+
+
+def _load_open_models():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_open_models.py")
+    spec = importlib.util.spec_from_file_location("openbench_open_models", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The dict above is the default. An optional TOML registry
+# (``.openbench/open_models.toml`` or ``~/.openbench/open_models.toml``, see
+# ``_open_models.py``) may add entries or retune existing ones, so a user can
+# carry a BYO route without a diff against the adapter. ``OPEN_MODELS_SOURCE``
+# is the file it came from, or None when the built-ins are untouched.
+OPEN_MODELS, OPEN_MODELS_SOURCE = _load_open_models().load(
+    NAME, OPEN_MODELS,
+    required=("provider", "effort"),
+    defaults={"effort": "medium"},
+)
 
 # Host-side bridge (LiteLLM proxy). Port must match bench/openmodel_bridge.sh
 # (both default to 4141; override in lockstep via BENCH_BRIDGE_PORT).

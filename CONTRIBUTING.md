@@ -36,6 +36,10 @@ the existing adapters in `obench/adapters/` are working references. Auth must be
 handled inside the adapter, read-only — never modify the user's real config
 files.
 
+To add an open / BYO model route to the existing adapters you do not need to
+touch adapter code at all: write a `.openbench/open_models.toml` registry as
+described in the same spec.
+
 ## Pull requests
 
 - Keep changes focused and reviewable.

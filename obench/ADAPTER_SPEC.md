@@ -71,3 +71,52 @@ returns completed=True) is used as a negative control.
 | opencode | `opencode run -m openai/gpt-5.5 --variant medium ...`                |
 | cursor   | `cursor-agent -p --force --model gpt-5.5-medium ...`                 |
 | devin    | CLI at ~/.local/bin/devin - headless support unknown, investigate    |
+
+## Open-model registry (optional)
+
+Adapters that support open / BYO models carry an in-code `OPEN_MODELS` dict.
+That dict is the default. To add or retune a route without editing adapter
+code, write a TOML registry and the adapters merge it over their defaults at
+import time:
+
+1. `$OPENBENCH_OPEN_MODELS` (explicit path; set it empty to disable lookup)
+2. `.openbench/open_models.toml`, walking up from the working directory
+3. `~/.openbench/open_models.toml`
+
+Shared fields go on the model table, adapter-specific ones in a subtable named
+for the adapter:
+
+```toml
+[models.qwen3-coder]
+provider = "openrouter"
+model_id = "qwen/qwen3-coder"
+base_url = "https://openrouter.ai/api/v1"
+env_key  = "OPENROUTER_API_KEY"
+display  = "OpenRouter Qwen3 Coder"
+
+[models.qwen3-coder.opencode]
+variant = "high"
+```
+
+One `[models.<name>]` block is enough for every adapter: each fills its own
+field (`effort`, `variant`, `thinking`, `proxy_route`) from its defaults unless
+a subtable overrides it. `grokbuild` derives `proxy_route` from `provider`.
+
+A name containing a dot must be quoted, or TOML reads it as a dotted key:
+`[models."glm-5.2"]`, not `[models.glm-5.2]`. Most of the built-in names have a
+dot in them.
+
+Overriding one field of a built-in leaves the rest of that entry intact, nested
+tables (`compat`, `thinkingLevelMap`) included, so
+`[models."glm-5.2"] model_id = "glm-5.2-airx"` keeps the existing `env_key`,
+`base_url` and compat flags.
+
+`model_id`, `base_url`, `env_key` and `display` are required on any model the
+registry introduces, plus whatever the adapter needs. A malformed registry
+raises at import rather than silently falling back, so a bad file fails the run
+instead of quietly changing which model was measured.
+
+Every adapter also exposes `OPEN_MODELS_SOURCE`, the registry path or `None`.
+`obench doctor` marks a registry-sourced model as `(open via registry)` and
+prints the path, so a run whose model set was overridden is visible in preflight
+rather than only in the config file.
