@@ -4,11 +4,13 @@
 import importlib.util
 import json
 import os
+import subprocess
 
 BENCH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 import tempfile
 import unittest
+from unittest import mock
 
 ADAPTERS_DIR = os.path.join(BENCH_DIR, "adapters")
 FIXTURE_DIR = os.path.join(BENCH_DIR, "tests", "fixtures", "usage", "deepseek-v4-flash")
@@ -144,6 +146,40 @@ class TokenParityFixtureTests(unittest.TestCase):
         self.assertEqual(turns, 1)
         self.assert_usage_matches(actual, expected("codex"))
         self.assertEqual(tokens, 508)  # do not double-count reasoning subset
+
+    def test_codex_153_cache_write_field_survives_run_normalization(self):
+        codex = load_adapter("codex")
+        fixture = os.path.join(BENCH_DIR, "tests", "fixtures", "usage",
+                               "codex-0.153.0", "turn-completed.json")
+        with open(fixture, encoding="utf-8") as fh:
+            event = json.load(fh)
+        # The captured event reports zero. Missing and positive values below
+        # are synthetic boundary cases for the same schema.
+        for writes in (0, None, 30):
+            with self.subTest(cache_write_input_tokens=writes):
+                usage = dict(event["usage"])
+                if writes is None:
+                    usage.pop("cache_write_input_tokens")
+                else:
+                    usage["cache_write_input_tokens"] = writes
+                stream = json.dumps({"type": "turn.completed", "usage": usage})
+                proc = subprocess.CompletedProcess([], 0, stdout=stream, stderr="")
+                with tempfile.TemporaryDirectory() as directory:
+                    with mock.patch.object(codex.subprocess, "run", return_value=proc):
+                        result = codex.run(
+                            "offline replay", directory, "gpt-5.6-sol", 1,
+                            env_override={"CODEX_HOME": directory},
+                        )
+                self.assertTrue(result["completed"])
+                self.assertEqual(result["usage_raw"], usage)
+                self.assertEqual(result["tokens_cache_write"], writes)
+                self.assertEqual(result["token_basis"],
+                                 "estimated" if writes is None else "vendor_split")
+                self.assertEqual(result["tokens_input_uncached"], 17667 - (writes or 0))
+                self.assertEqual(result["tokens_cache_read"], 106368)
+                self.assertEqual(result["tokens_output"], 4774)
+                self.assertEqual(result["tokens_reasoning"], 2278)
+                self.assertEqual(result["tokens"], 22441 - (writes or 0))
 
     def test_invariant_violation_downgrades_basis(self):
         pi = load_adapter("pi")
