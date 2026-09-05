@@ -20,11 +20,12 @@ Notes / quirks:
 - Copies only runtime `auth.json` into a fresh `CODEX_HOME`; personal config,
   instructions, skills, plugins, MCPs, rules, memories, and sessions are absent.
 - `--json` emits a JSONL event stream. The final `turn.completed` event carries
-  `usage={input_tokens,cached_input_tokens,output_tokens,reasoning_output_tokens}`.
+  `usage={input_tokens,cached_input_tokens,cache_write_input_tokens,
+          output_tokens,reasoning_output_tokens}` on Codex 0.153.0.
   Token accounting emits TOKEN_PARITY.md split fields from the final aggregate:
-    tokens_input_uncached = input_tokens - cached_input_tokens
+    tokens_input_uncached = input_tokens - cached_input_tokens - cache_write_input_tokens
     tokens_cache_read     = cached_input_tokens
-    tokens_cache_write    = 0
+    tokens_cache_write    = cache_write_input_tokens  # when reported
     tokens_output         = output_tokens  # already reasoning-inclusive
     tokens_reasoning      = reasoning_output_tokens
     tokens                = tokens_input_uncached + tokens_output
@@ -356,10 +357,11 @@ def _parse_json_with_usage(stdout):
         inp = _num(last_usage.get("input_tokens"))
         cached = _num(last_usage.get("cached_input_tokens"))
         cache_write = _num(
-            last_usage.get("cache_write_tokens")
-            or last_usage.get("cache_creation_input_tokens")
-            or last_usage.get("cache_creation_tokens")
-            or 0
+            last_usage.get("cache_write_input_tokens",
+                last_usage.get("cache_write_tokens")
+                or last_usage.get("cache_creation_input_tokens")
+                or last_usage.get("cache_creation_tokens")
+                or 0)
         )
         out = _num(last_usage.get("output_tokens"))
         reasoning = _num(last_usage.get("reasoning_output_tokens"))
@@ -529,7 +531,7 @@ def run(
 
     if model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna") and token_usage.get("token_basis") == "vendor_split":
         raw = token_usage.get("usage_raw") or {}
-        if not any(k in raw for k in ("cache_write_tokens", "cache_creation_input_tokens", "cache_creation_tokens")):
+        if not any(k in raw for k in ("cache_write_input_tokens", "cache_write_tokens", "cache_creation_input_tokens", "cache_creation_tokens")):
             # GPT-5.6 may expose billable cache writes on newer Codex event
             # schemas. If this CLI omits the field, keep the legacy fresh-ish
             # scalar usable for the smoke contract but do not assert complete
