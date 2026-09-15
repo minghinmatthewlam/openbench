@@ -27,6 +27,7 @@ model output was produced, the failure belongs to the harness or provider, not
 the model's ability to solve the task.
 """
 
+import math
 import re
 
 STALLED = "stalled"
@@ -119,6 +120,46 @@ def has_instant_cli_exit_shape(row):
     if not isinstance(wall, (int, float)) or isinstance(wall, bool):
         return False
     return float(wall) < 30.0
+
+
+def has_no_work_incomplete_shape(row, text=""):
+    """True for a measured incomplete run with no observed model work.
+
+    This extends the instant-exit gate to longer provider abandonment, such as
+    an overload retry loop that exits before the time cap. Require the runner's
+    explicit unchanged-workspace observation and present core telemetry fields;
+    missing fields in sparse historical rows are not observations of no work.
+
+    Present ``None`` usage/turns remain valid: Codex returns them when no
+    ``turn.completed`` event arrives. They mean no usage was captured, not proof
+    that the provider did no computation. Any reported work or meaningful output
+    suppresses this structural inference. Call after timeout classification so
+    genuine timeouts retain precedence.
+    """
+    row = row or {}
+    if row.get("harness") == "null":
+        return False
+    if row.get("completed") is not False or bool(row.get("success")):
+        return False
+    wall = row.get("wall_time_s")
+    if (not isinstance(wall, (int, float)) or isinstance(wall, bool)
+            or not math.isfinite(wall) or wall < 0):
+        return False
+    if any(field not in row for field in ("tokens", "tokens_output", "turns")):
+        return False
+    if row.get("workspace_changed") is not False or _has_workspace_work_evidence(row):
+        return False
+    for field in (*_TOKEN_FIELDS, "turns"):
+        value = row.get(field)
+        if value is not None and (isinstance(value, bool)
+                                  or not isinstance(value, (int, float))
+                                  or value != 0):
+            return False
+    # Match the existing silent-run guard: short substantive answers count as
+    # work too, even if the adapter did not capture their token usage.
+    if len(_meaningful_work_text(text)) >= 10:
+        return False
+    return True
 
 
 def per_reply_outputs(row):
@@ -503,6 +544,12 @@ def classify_failure(row, adapter_output="", timeout_s=None):
         return "infra"
     if row.get("checker_exit") == "timeout" or _TIMEOUT_RE.search(structured_status) or rode_cap:
         return "timeout"
+    # After timeout handling: a measured incomplete run with no observed work
+    # (no tokens, no turns, untouched workspace) that did not ride the cap is a
+    # provider abandonment -- e.g. an OpenRouter overload retry loop that gave up
+    # after minutes. No work was observed, so treat the cell as infrastructure.
+    if has_no_work_incomplete_shape(row, combined):
+        return "infra"
     # wrong_answer must be checker-owned (exit 1). A row with NO checker exit
     # whose error is a Python traceback means the runner's own checker path
     # raised (evidence capture, scrub, or run_checker itself) -- that measures
