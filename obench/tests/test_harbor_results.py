@@ -597,6 +597,47 @@ class HarborResultsTests(unittest.TestCase):
     def fixture(self) -> GoldenHarborJob:
         return GoldenHarborJob(self.root / "job")
 
+    def custom_environment_fixture(self, name, *, null_in_lock=False):
+        fixture = GoldenHarborJob(self.root / name)
+        job_lock = json.loads((fixture.root / "lock.json").read_text())
+        for index in range(len(fixture.specs)):
+            lock_path = fixture.trial(index) / "lock.json"
+            lock = json.loads(lock_path.read_text())
+            lock["environment"] = {"import_path": "example.environment:CustomEnvironment"}
+            result_path = fixture.trial(index) / "result.json"
+            result = json.loads(result_path.read_text())
+            result["config"]["environment"] = dict(lock["environment"])
+            if null_in_lock:
+                lock["environment"]["type"] = None
+            else:
+                result["config"]["environment"]["type"] = None
+            job_lock["trials"][index] = lock
+            _write_json(lock_path, lock)
+            _write_json(result_path, result)
+        _write_json(fixture.root / "lock.json", job_lock)
+        fixture.sync_aggregate()
+        return fixture
+
+    def test_custom_environment_accepts_omitted_and_null_type(self):
+        for null_in_lock in (False, True):
+            with self.subTest(null_in_lock=null_in_lock):
+                fixture = self.custom_environment_fixture(
+                    f"custom-{null_in_lock}", null_in_lock=null_in_lock)
+                self.assertEqual(len(load_rows(fixture.root)), len(fixture.specs))
+
+    def test_custom_environment_still_rejects_selector_and_import_path_drift(self):
+        for key, value in (("type", "docker"), ("import_path", "example.environment:OtherEnvironment")):
+            with self.subTest(field=key):
+                fixture = self.custom_environment_fixture(f"drift-{key}")
+                self.assertEqual(len(load_rows(fixture.root)), len(fixture.specs))
+                result_path = fixture.trial() / "result.json"
+                result = json.loads(result_path.read_text())
+                result["config"]["environment"][key] = value
+                _write_json(result_path, result)
+                fixture.sync_aggregate()
+                with self.assertRaisesRegex(HarborResultsError, r"result.config.environment.*does not match trial lock"):
+                    load_rows(fixture.root)
+
     def qualified_model_fixture(
         self,
         name: str,

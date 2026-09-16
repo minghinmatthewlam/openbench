@@ -426,6 +426,9 @@ _AGENT_DEFAULTS = {
     "mcp_servers": [],
 }
 _ENVIRONMENT_DEFAULTS = {
+    # Pinned Harbor omits this null selector from custom-environment locks,
+    # but includes it in TrialResult.config. Explicit selectors still compare.
+    "type": None,
     "import_path": None,
     "force_build": False,
     "delete": True,
